@@ -48,7 +48,7 @@ jobs:
       # 6. S3에 파일 업로드
       - name: Deploy to S3
         run: |
-          aws s3 sync ./frontend/build s3://${{ secrets.AWS_S3_BUCKET }} --delete
+          aws s3 sync ./frontend/dist s3://${{ secrets.AWS_S3_BUCKET }} --delete
 
       # 7. CloudFront 캐시 무효화
       - name: Invalidate CloudFront cache
