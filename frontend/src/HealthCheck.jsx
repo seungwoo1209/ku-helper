@@ -11,7 +11,7 @@ function HealthCheck() {
     
     try {
       // 백엔드 API URL (나중에 실제 URL로 변경)
-      const res = await fetch('http://localhost:8000/health');
+      const res = await fetch('http://43.203.239.40/health');
       const data = await res.json();
       setResponse(data);
     } catch (err) {
