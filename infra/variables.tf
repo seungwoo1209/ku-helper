@@ -33,3 +33,27 @@ variable "ssh_ingress_cidr" {
   type        = string
   default     = "0.0.0.0/0"
 }
+
+variable "github_owner" {
+  description = "GitHub owner (user or organization) that owns the deployment repository"
+  type        = string
+  default     = "seungwoo1209"
+}
+
+variable "github_repository" {
+  description = "GitHub repository name where Actions secrets should be created"
+  type        = string
+  default     = "ku-helper"
+}
+
+variable "github_token" {
+  description = "GitHub Personal Access Token with `repo` scope, used to publish Actions secrets"
+  type        = string
+  sensitive   = true
+}
+
+variable "ec2_ssh_private_key_secret_name" {
+  description = "Name of the GitHub Actions secret that stores the EC2 SSH private key (PEM)"
+  type        = string
+  default     = "EC2_SSH_PRIVATE_KEY"
+}

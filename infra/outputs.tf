@@ -43,3 +43,8 @@ output "ssh_command" {
   description = "Convenience SSH command to connect to the instance"
   value       = "ssh -i ${local_sensitive_file.private_key_pem.filename} ec2-user@${aws_instance.app.public_ip}"
 }
+
+output "github_actions_ssh_secret_name" {
+  description = "Name of the GitHub Actions secret that holds the EC2 SSH private key"
+  value       = github_actions_secret.ec2_ssh_private_key.secret_name
+}
