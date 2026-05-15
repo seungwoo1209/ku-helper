@@ -50,7 +50,7 @@ alembic/versions/      # 마이그레이션 파일
 
 ## Detail rules
 
-@.claude/rules/architecture.md
-@.claude/rules/testing.md
-@.claude/rules/code-style.md
-@.claude/rules/security.md
+@.claude/architecture.md
+@.claude/testing.md
+@.claude/code_style.md
+@.claude/security.md
