@@ -1,20 +1,28 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import RedirectResponse
 
 from app.domains.auth.dependencies import get_auth_service
-from app.domains.auth.schemas import LoginUrlRead, TokenRead
+from app.domains.auth.schemas import TokenRead
 from app.domains.auth.service import AuthService
 
 router = APIRouter(prefix="/auth/discord", tags=["auth"])
 
 
-@router.get("/login", response_model=LoginUrlRead, status_code=200)
+@router.get(
+    "/login",
+    response_class=RedirectResponse,
+    status_code=307,
+)
 async def login(
     service: Annotated[AuthService, Depends(get_auth_service)],
-) -> LoginUrlRead:
-    """Discord 인증 URL과 서명된 state를 발급한다."""
-    return await service.build_login_url()
+) -> RedirectResponse:
+    """Discord 인가 페이지로 사용자를 리다이렉트한다."""
+    return RedirectResponse(
+        url=await service.build_login_url(),
+        status_code=307,
+    )
 
 
 @router.get("/callback", response_model=TokenRead, status_code=200)

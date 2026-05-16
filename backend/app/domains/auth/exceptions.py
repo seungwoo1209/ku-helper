@@ -7,7 +7,6 @@ class AuthErrorCode(StrEnum):
     INVALID_OAUTH_STATE = "INVALID_OAUTH_STATE"
     DISCORD_TOKEN_EXCHANGE_FAILED = "DISCORD_TOKEN_EXCHANGE_FAILED"
     DISCORD_USER_FETCH_FAILED = "DISCORD_USER_FETCH_FAILED"
-    DISCORD_GUILD_JOIN_FAILED = "DISCORD_GUILD_JOIN_FAILED"
 
 
 class InvalidOAuthState(AppException):
@@ -25,10 +24,4 @@ class DiscordTokenExchangeFailed(AppException):
 class DiscordUserFetchFailed(AppException):
     code = AuthErrorCode.DISCORD_USER_FETCH_FAILED.value
     detail = "Discord 사용자 정보를 가져오지 못했습니다."
-    status_code = 502
-
-
-class DiscordGuildJoinFailed(AppException):
-    code = AuthErrorCode.DISCORD_GUILD_JOIN_FAILED.value
-    detail = "Discord 길드 가입에 실패했습니다."
     status_code = 502

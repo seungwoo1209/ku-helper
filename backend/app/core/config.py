@@ -26,12 +26,11 @@ class Settings(BaseSettings):
 
     discord_client_id: str
     discord_client_secret: SecretStr
-    discord_bot_token: SecretStr
     discord_redirect_uri: str
-    discord_guild_id: int
-    discord_oauth_scopes: list[str] = Field(
-        default_factory=lambda: ["identify", "guilds.join"]
-    )
+    discord_oauth_scopes: list[str] = Field(default_factory=lambda: ["identify"])
+    # 1 = USER_INSTALL (Discord 사용자 계정 설치), 0 = GUILD_INSTALL.
+    # 사용자 설치 흐름으로 통일하므로 기본값은 1.
+    discord_integration_type: int = 1
 
 
 @lru_cache
