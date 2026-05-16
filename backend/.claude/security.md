@@ -39,11 +39,13 @@ Discord OAuth 클라이언트 라이브러리: `httpx-oauth`의 `DiscordOAuth2`.
 
 ## Discord 봇 토큰
 
-현재 user-install 흐름이라 서버에서 봇 토큰을 직접 사용하지 않는다. 향후 DM 발송·슬래시 커맨드 등 봇 API 호출을 재도입할 때 적용할 규칙:
+현재 환영 DM 발송에 봇 토큰을 사용한다. 향후 추가 봇 API(슬래시 커맨드 등) 호출도 같은 규칙을 따른다.
 
 - 봇 토큰은 절대 클라이언트에 노출되지 않는다. 봇 API 호출은 서버에서만 수행한다.
-- 봇 토큰을 사용하는 함수는 `app/core/discord.py` 또는 `app/domains/discord/`에 격리한다.
-- Discord API `429` 응답은 외부 클라이언트 래퍼에서 처리한다 (`Retry-After` 헤더 준수). Service는 rate limit을 모른다. 재시도 정책은 클라이언트 계층의 책임.
+- 봇 토큰을 사용하는 함수는 `app/core/discord.py`에 격리한다 (`DiscordBotClient`).
+- DM 발송 흐름: `POST /users/@me/channels`(채널 생성) → `POST /channels/{channel_id}/messages`(메시지 전송). 두 호출 모두 봇 토큰을 `Authorization: Bot <token>` 헤더로 보낸다.
+- Discord API `429` 응답은 외부 클라이언트 래퍼에서 처리한다 (`Retry-After` 헤더 준수, 최대 3회 재시도). Service는 rate limit을 모른다. 재시도 정책은 클라이언트 계층의 책임.
+- DM 발송 실패는 베스트 에포트로 처리(로그인 흐름을 막지 않음). 라우터의 `BackgroundTasks`로 응답 종료 후 비동기 실행.
 
 ## 입력 검증
 

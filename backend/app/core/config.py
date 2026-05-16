@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     discord_client_id: str
     discord_client_secret: SecretStr
+    discord_bot_token: SecretStr
     discord_redirect_uri: str
     discord_oauth_scopes: list[str] = Field(default_factory=lambda: ["identify"])
     # 1 = USER_INSTALL (Discord 사용자 계정 설치), 0 = GUILD_INSTALL.

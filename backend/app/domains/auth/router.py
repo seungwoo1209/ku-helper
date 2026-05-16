@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from fastapi.responses import RedirectResponse
 
 from app.domains.auth.dependencies import get_auth_service
@@ -29,7 +29,12 @@ async def login(
 async def callback(
     code: Annotated[str, Query(...)],
     state: Annotated[str, Query(...)],
+    background_tasks: BackgroundTasks,
     service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenRead:
     """Discord OAuth 콜백을 처리하고 자체 JWT를 발급한다."""
-    return await service.handle_callback(code, state)
+    result = await service.handle_callback(code, state)
+    background_tasks.add_task(
+        service.maybe_send_welcome_dm, result.discord_id, result.is_new_user
+    )
+    return result.token
