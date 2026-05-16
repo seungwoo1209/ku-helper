@@ -28,7 +28,11 @@ class Settings(BaseSettings):
     discord_client_secret: SecretStr
     discord_bot_token: SecretStr
     discord_redirect_uri: str
-    discord_oauth_scopes: list[str] = Field(default_factory=lambda: ["identify"])
+    discord_oauth_scopes: list[str] = Field(
+        # applications.commands는 user-install이 자동 성립하도록 유도.
+        # 이후 50278(mutual guilds 없음)로 인한 DM 실패가 사라지는지 가설 검증 중.
+        default_factory=lambda: ["identify", "applications.commands"]
+    )
     # 1 = USER_INSTALL (Discord 사용자 계정 설치), 0 = GUILD_INSTALL.
     # 사용자 설치 흐름으로 통일하므로 기본값은 1.
     discord_integration_type: int = 1
