@@ -35,7 +35,11 @@ class AuthService:
             redirect_uri=self._settings.discord_redirect_uri,
             state=state,
             scope=self._settings.discord_oauth_scopes,
-            extras_params={"integration_type": self._settings.discord_integration_type},
+            extras_params={
+                "integration_type": self._settings.discord_integration_type,
+                # 이미 동일 scope로 인가한 사용자는 동의 화면 없이 바로 콜백.
+                "prompt": "none",
+            },
         )
 
     async def handle_callback(self, code: str, state: str) -> TokenRead:
