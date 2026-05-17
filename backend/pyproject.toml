@@ -13,6 +13,7 @@ dependencies = [
     "structlog>=24.0",
     "httpx>=0.27",
     "httpx-oauth>=0.16",
+    "alembic>=1.13",
 ]
 
 [dependency-groups]
