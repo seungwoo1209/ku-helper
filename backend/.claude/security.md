@@ -9,9 +9,16 @@
 5. `discord_id`로 사용자를 upsert한다 (없으면 생성, 있으면 갱신).
 6. 우리 서버의 자체 JWT를 발급해 응답한다.
 
-OAuth scope는 최소화한다. 현재는 `identify`만 요청. `email`·`guilds.join`·`applications.commands` 등은 실제 필요한 기능이 생긴 시점에 추가한다.
+OAuth scope는 최소화한다. 현재는 `identify`, `applications.commands` 두 개. `applications.commands`는 user-install(`integration_type=1`)을 자동 성립시켜, mutual guild가 없는 사용자에게 DM을 보낼 때 발생하는 Discord 에러 `50278`을 회피하기 위함. `email`·`guilds.join` 등 그 외 scope는 실제 필요한 기능이 생긴 시점에 추가한다.
 
 Discord OAuth 클라이언트 라이브러리: `httpx-oauth`의 `DiscordOAuth2`. 의존성 생성은 `app/domains/auth/dependencies.py`에서 수행한다.
+
+## 사용자 상태와 탈퇴 (`User.status`)
+
+- `User.status: UserStatus`는 `ACTIVE` 또는 `DELETED` 두 값만 가진다 (`app/domains/users/models.py`). 기본값은 `ACTIVE`.
+- `DELETE /users/me`는 물리 삭제가 아닌 **소프트 삭제**다. `UserService.delete_account`가 `UserRepository.soft_delete`를 호출해 status를 `DELETED`로 전환한다. 알림 설정·발송 이력 도메인이 추가되면 같은 메서드 안에서 cascade 정리를 함께 수행한다.
+- `get_current_user`는 사용자 조회 후 `status == DELETED`이면 401 `USER_DELETED` 도메인 예외를 던진다. 탈퇴한 사용자가 들고 있던 기존 access token은 자동으로 무효화되는 효과.
+- 탈퇴한 사용자가 동일 Discord 계정으로 재로그인하면 `UserRepository.upsert_by_discord_id`가 status를 `ACTIVE`로 되돌리며 기존 레코드를 재사용한다. 이때 반환되는 `is_new_user`는 여전히 `False`로 두어 환영 DM이 재발송되지 않도록 한다.
 
 ## 자체 JWT
 

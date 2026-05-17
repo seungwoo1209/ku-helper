@@ -12,6 +12,11 @@ class UserStatus(StrEnum):
     DELETED = "DELETED"
 
 
+class UserRole(StrEnum):
+    USER = "USER"
+    ADMIN = "ADMIN"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -25,6 +30,12 @@ class User(Base):
         nullable=False,
         default=UserStatus.ACTIVE,
         server_default=UserStatus.ACTIVE.value,
+    )
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole, name="user_role"),
+        nullable=False,
+        default=UserRole.USER,
+        server_default=UserRole.USER.value,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
