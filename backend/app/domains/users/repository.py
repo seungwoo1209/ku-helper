@@ -20,13 +20,13 @@ class UserRepository:
 
     async def upsert_by_discord_id(
         self, discord_id: int, discord_username: str
-    ) -> User:
+    ) -> tuple[User, bool]:
         existing = await self.get_by_discord_id(discord_id)
         if existing is not None:
             existing.discord_username = discord_username
             await self._session.flush()
-            return existing
+            return existing, False
         user = User(discord_id=discord_id, discord_username=discord_username)
         self._session.add(user)
         await self._session.flush()
-        return user
+        return user, True
