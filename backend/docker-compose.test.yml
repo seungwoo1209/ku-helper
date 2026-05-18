@@ -1,0 +1,22 @@
+name: ku-helper-test
+
+services:
+  db:
+    image: postgres:16
+    container_name: ku-helper-db-test
+    environment:
+      POSTGRES_USER: ku_helper
+      POSTGRES_PASSWORD: ku_helper_test
+      POSTGRES_DB: ku_helper_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - ku-helper-db-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ku_helper -d ku_helper_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ku-helper-db-test-data:
