@@ -24,12 +24,14 @@ _DELIVERY_STATUS_VALUES = ("SUCCESS", "FAILED")
 
 def upgrade() -> None:
     bind = op.get_bind()
-    sa.Enum(*_NOTIFICATION_TYPE_VALUES, name="notification_type").create(
+    # create_type 파라미터는 sa.Enum이 아니라 postgresql.ENUM의 인자이므로
+    # op.create_table 안의 컬럼은 dialect ENUM으로 둬야 자동 CREATE TYPE을 막을 수 있다.
+    postgresql.ENUM(*_NOTIFICATION_TYPE_VALUES, name="notification_type").create(
         bind, checkfirst=True
     )
-    sa.Enum(*_DELIVERY_STATUS_VALUES, name="notification_delivery_status").create(
-        bind, checkfirst=True
-    )
+    postgresql.ENUM(
+        *_DELIVERY_STATUS_VALUES, name="notification_delivery_status"
+    ).create(bind, checkfirst=True)
 
     op.create_table(
         "notifications",
@@ -42,7 +44,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "type",
-            sa.Enum(
+            postgresql.ENUM(
                 *_NOTIFICATION_TYPE_VALUES,
                 name="notification_type",
                 create_type=False,
@@ -99,7 +101,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "status",
-            sa.Enum(
+            postgresql.ENUM(
                 *_DELIVERY_STATUS_VALUES,
                 name="notification_delivery_status",
                 create_type=False,
@@ -137,5 +139,5 @@ def downgrade() -> None:
     op.drop_table("notifications")
 
     bind = op.get_bind()
-    sa.Enum(name="notification_delivery_status").drop(bind, checkfirst=True)
-    sa.Enum(name="notification_type").drop(bind, checkfirst=True)
+    postgresql.ENUM(name="notification_delivery_status").drop(bind, checkfirst=True)
+    postgresql.ENUM(name="notification_type").drop(bind, checkfirst=True)

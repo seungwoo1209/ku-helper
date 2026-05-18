@@ -50,6 +50,9 @@ class NotificationRepository:
         if config is not None:
             notification.config = config
         await self._session.flush()
+        # onupdate=func.now()로 updated_at이 서버 측 값으로 갱신되지만 flush만으로는
+        # 파이썬 객체에 반영되지 않아 직렬화 시 lazy-load가 일어난다. refresh로 한 번에 가져온다.
+        await self._session.refresh(notification)
         return notification
 
     async def delete(self, notification: Notification) -> None:

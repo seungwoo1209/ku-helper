@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.users.models import User, UserStatus
@@ -35,5 +35,8 @@ class UserRepository:
         return user, True
 
     async def soft_delete(self, user: User) -> None:
-        user.status = UserStatus.DELETED
+        # get_current_user가 별도 세션에서 가져온 User 객체를 받는 경우가 있어
+        # ORM 속성 대입 + flush로는 변경이 영속화되지 않는다. 명시 UPDATE로 처리.
+        stmt = update(User).where(User.id == user.id).values(status=UserStatus.DELETED)
+        await self._session.execute(stmt)
         await self._session.flush()
