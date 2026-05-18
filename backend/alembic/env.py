@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.database import Base
 
 # 모델 모듈을 import 해 Base.metadata에 테이블을 등록한다.
+from app.domains.notifications import models as _notifications_models  # noqa: F401
 from app.domains.users import models as _users_models  # noqa: F401
 
 config = context.config
