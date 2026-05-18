@@ -52,7 +52,7 @@
 - **architecture.md 명시**: state 토큰·캐시·쿨다운·관리자 알림 dedupe.
 - **현재 격차**: state 토큰은 JWT(stateless)로 구현 중. 캐시는 없음.
 - **단계**:
-  1. `Settings.redis_url` 추가 + `docker-compose.yml`에 redis 서비스.
+  1. `Settings.redis_url` 추가 + `docker-compose-dev.yml`에 redis 서비스.
   2. lifespan에서 `redis.asyncio.from_url` 클라이언트 생성·종료.
   3. OAuth state 토큰을 Redis로 이전 (TTL 5분). 단, JWT 방식 그대로 두고 캐시·블랙리스트만 Redis로 갈 수도 있음 — 비용/장애 면 검토.
 
