@@ -177,7 +177,25 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/NotificationRead"
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/_TransitRead"
+                      },
+                      {
+                        "$ref": "#/components/schemas/_LunchRead"
+                      },
+                      {
+                        "$ref": "#/components/schemas/_LibraryRead"
+                      }
+                    ],
+                    "discriminator": {
+                      "propertyName": "type",
+                      "mapping": {
+                        "TRANSIT": "#/components/schemas/_TransitRead",
+                        "LUNCH": "#/components/schemas/_LunchRead",
+                        "LIBRARY": "#/components/schemas/_LibraryRead"
+                      }
+                    }
                   },
                   "type": "array",
                   "title": "Response List Notifications Api V1 Me Notifications Get"
@@ -197,7 +215,7 @@
           "notifications"
         ],
         "summary": "Create Notification",
-        "description": "새 알림 설정을 생성한다.",
+        "description": "새 알림 설정을 생성한다. type별 config 스키마는 Swagger의 oneOf로 노출된다.",
         "operationId": "create_notification_api_v1_me_notifications_post",
         "requestBody": {
           "content": {
@@ -226,7 +244,26 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NotificationRead"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/_TransitRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LunchRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LibraryRead"
+                    }
+                  ],
+                  "title": "Response Create Notification Api V1 Me Notifications Post",
+                  "discriminator": {
+                    "propertyName": "type",
+                    "mapping": {
+                      "TRANSIT": "#/components/schemas/_TransitRead",
+                      "LUNCH": "#/components/schemas/_LunchRead",
+                      "LIBRARY": "#/components/schemas/_LibraryRead"
+                    }
+                  }
                 }
               }
             }
@@ -280,64 +317,26 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NotificationRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "notifications"
-        ],
-        "summary": "Update Notification",
-        "description": "알림 설정을 부분 수정한다. config는 전체 교체.",
-        "operationId": "update_notification_api_v1_me_notifications__notification_id__patch",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "notification_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "title": "Notification Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NotificationUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotificationRead"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/_TransitRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LunchRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LibraryRead"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "type",
+                    "mapping": {
+                      "TRANSIT": "#/components/schemas/_TransitRead",
+                      "LUNCH": "#/components/schemas/_LunchRead",
+                      "LIBRARY": "#/components/schemas/_LibraryRead"
+                    }
+                  },
+                  "title": "Response Get Notification Api V1 Me Notifications  Notification Id  Get"
                 }
               }
             }
@@ -381,6 +380,240 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/notifications/transit/{notification_id}": {
+      "patch": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Update Transit Notification",
+        "description": "교통 알림 설정을 부분 수정한다. config는 전체 교체.",
+        "operationId": "update_transit_notification_api_v1_me_notifications_transit__notification_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "notification_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Notification Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/_TransitRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LunchRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LibraryRead"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "type",
+                    "mapping": {
+                      "TRANSIT": "#/components/schemas/_TransitRead",
+                      "LUNCH": "#/components/schemas/_LunchRead",
+                      "LIBRARY": "#/components/schemas/_LibraryRead"
+                    }
+                  },
+                  "title": "Response Update Transit Notification Api V1 Me Notifications Transit  Notification Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/notifications/lunch/{notification_id}": {
+      "patch": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Update Lunch Notification",
+        "description": "점심 알림 설정을 부분 수정한다. config는 전체 교체.",
+        "operationId": "update_lunch_notification_api_v1_me_notifications_lunch__notification_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "notification_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Notification Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LunchUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/_TransitRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LunchRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LibraryRead"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "type",
+                    "mapping": {
+                      "TRANSIT": "#/components/schemas/_TransitRead",
+                      "LUNCH": "#/components/schemas/_LunchRead",
+                      "LIBRARY": "#/components/schemas/_LibraryRead"
+                    }
+                  },
+                  "title": "Response Update Lunch Notification Api V1 Me Notifications Lunch  Notification Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/notifications/library/{notification_id}": {
+      "patch": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Update Library Notification",
+        "description": "도서관 알림 설정을 부분 수정한다. config는 전체 교체.",
+        "operationId": "update_library_notification_api_v1_me_notifications_library__notification_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "notification_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Notification Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LibraryUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/_TransitRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LunchRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/_LibraryRead"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "type",
+                    "mapping": {
+                      "TRANSIT": "#/components/schemas/_TransitRead",
+                      "LUNCH": "#/components/schemas/_LunchRead",
+                      "LIBRARY": "#/components/schemas/_LibraryRead"
+                    }
+                  },
+                  "title": "Response Update Library Notification Api V1 Me Notifications Library  Notification Id  Patch"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -466,6 +699,33 @@
         ],
         "title": "LibraryConfig"
       },
+      "LibraryUpdate": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LibraryConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "LibraryUpdate"
+      },
       "LunchConfig": {
         "properties": {
           "notify_at": {
@@ -491,6 +751,11 @@
             "minimum": 1.0,
             "title": "Recommend Count",
             "default": 3
+          },
+          "highlight_today_pick": {
+            "type": "boolean",
+            "title": "Highlight Today Pick",
+            "default": true
           }
         },
         "type": "object",
@@ -499,61 +764,7 @@
         ],
         "title": "LunchConfig"
       },
-      "NotificationRead": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "user_id": {
-            "type": "integer",
-            "title": "User Id"
-          },
-          "type": {
-            "$ref": "#/components/schemas/NotificationType"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "user_id",
-          "type",
-          "enabled",
-          "config",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "NotificationRead"
-      },
-      "NotificationType": {
-        "type": "string",
-        "enum": [
-          "TRANSIT",
-          "LUNCH",
-          "LIBRARY"
-        ],
-        "title": "NotificationType"
-      },
-      "NotificationUpdate": {
+      "LunchUpdate": {
         "properties": {
           "enabled": {
             "anyOf": [
@@ -569,18 +780,16 @@
           "config": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/LunchConfig"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Config"
+            ]
           }
         },
         "type": "object",
-        "title": "NotificationUpdate"
+        "title": "LunchUpdate"
       },
       "TokenRead": {
         "properties": {
@@ -605,58 +814,47 @@
         ],
         "title": "TokenRead"
       },
-      "TransitConfig": {
+      "TransitUpdate": {
         "properties": {
-          "station_name": {
-            "type": "string",
-            "maxLength": 50,
-            "minLength": 1,
-            "title": "Station Name"
-          },
-          "line": {
-            "type": "string",
-            "maxLength": 20,
-            "minLength": 1,
-            "title": "Line"
-          },
-          "minutes_before": {
+          "enabled": {
             "anyOf": [
               {
-                "type": "integer",
-                "maximum": 120.0,
-                "minimum": 1.0
+                "type": "boolean"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Minutes Before"
+            "title": "Enabled"
           },
-          "repeat_interval_minutes": {
+          "config": {
             "anyOf": [
               {
-                "type": "integer",
-                "maximum": 180.0,
-                "minimum": 1.0
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/_TransitArrival"
+                  },
+                  {
+                    "$ref": "#/components/schemas/_TransitRecurring"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "mode",
+                  "mapping": {
+                    "arrival": "#/components/schemas/_TransitArrival",
+                    "recurring": "#/components/schemas/_TransitRecurring"
+                  }
+                }
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Repeat Interval Minutes"
-          },
-          "include_congestion": {
-            "type": "boolean",
-            "title": "Include Congestion",
-            "default": true
+            "title": "Config"
           }
         },
         "type": "object",
-        "required": [
-          "station_name",
-          "line"
-        ],
-        "title": "TransitConfig"
+        "title": "TransitUpdate"
       },
       "UserRead": {
         "properties": {
@@ -761,6 +959,51 @@
         ],
         "title": "_LibraryCreate"
       },
+      "_LibraryRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "user_id": {
+            "type": "integer",
+            "title": "User Id"
+          },
+          "type": {
+            "type": "string",
+            "const": "LIBRARY",
+            "title": "Type"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "config": {
+            "$ref": "#/components/schemas/LibraryConfig"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "type",
+          "enabled",
+          "config",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "_LibraryRead"
+      },
       "_LunchCreate": {
         "properties": {
           "type": {
@@ -784,6 +1027,92 @@
         ],
         "title": "_LunchCreate"
       },
+      "_LunchRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "user_id": {
+            "type": "integer",
+            "title": "User Id"
+          },
+          "type": {
+            "type": "string",
+            "const": "LUNCH",
+            "title": "Type"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "config": {
+            "$ref": "#/components/schemas/LunchConfig"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "type",
+          "enabled",
+          "config",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "_LunchRead"
+      },
+      "_TransitArrival": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "arrival",
+            "title": "Mode"
+          },
+          "station_name": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Station Name"
+          },
+          "line": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Line"
+          },
+          "minutes_before": {
+            "type": "integer",
+            "maximum": 120.0,
+            "minimum": 1.0,
+            "title": "Minutes Before"
+          },
+          "include_congestion": {
+            "type": "boolean",
+            "title": "Include Congestion",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "station_name",
+          "line",
+          "minutes_before"
+        ],
+        "title": "_TransitArrival",
+        "description": "F-06 단발 도착 알림: 특정 시각에 N분 전 한 번 발송."
+      },
       "_TransitCreate": {
         "properties": {
           "type": {
@@ -797,7 +1126,22 @@
             "default": true
           },
           "config": {
-            "$ref": "#/components/schemas/TransitConfig"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/_TransitArrival"
+              },
+              {
+                "$ref": "#/components/schemas/_TransitRecurring"
+              }
+            ],
+            "title": "Config",
+            "discriminator": {
+              "propertyName": "mode",
+              "mapping": {
+                "arrival": "#/components/schemas/_TransitArrival",
+                "recurring": "#/components/schemas/_TransitRecurring"
+              }
+            }
           }
         },
         "type": "object",
@@ -806,6 +1150,119 @@
           "config"
         ],
         "title": "_TransitCreate"
+      },
+      "_TransitRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "user_id": {
+            "type": "integer",
+            "title": "User Id"
+          },
+          "type": {
+            "type": "string",
+            "const": "TRANSIT",
+            "title": "Type"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/_TransitArrival"
+              },
+              {
+                "$ref": "#/components/schemas/_TransitRecurring"
+              }
+            ],
+            "title": "Config",
+            "discriminator": {
+              "propertyName": "mode",
+              "mapping": {
+                "arrival": "#/components/schemas/_TransitArrival",
+                "recurring": "#/components/schemas/_TransitRecurring"
+              }
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "type",
+          "enabled",
+          "config",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "_TransitRead"
+      },
+      "_TransitRecurring": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "recurring",
+            "title": "Mode"
+          },
+          "station_name": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Station Name"
+          },
+          "line": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Line"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "time",
+            "title": "Start Time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "time",
+            "title": "End Time"
+          },
+          "repeat_interval_minutes": {
+            "type": "integer",
+            "maximum": 180.0,
+            "minimum": 1.0,
+            "title": "Repeat Interval Minutes"
+          },
+          "include_congestion": {
+            "type": "boolean",
+            "title": "Include Congestion",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "station_name",
+          "line",
+          "start_time",
+          "end_time",
+          "repeat_interval_minutes"
+        ],
+        "title": "_TransitRecurring",
+        "description": "F-07 정기 간격 알림: 시작·종료 시각 사이 N분마다 반복 발송."
       }
     },
     "securitySchemes": {

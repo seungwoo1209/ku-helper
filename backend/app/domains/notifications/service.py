@@ -1,16 +1,14 @@
-from pydantic import ValidationError
-
 from app.domains.notifications.exceptions import (
-    InvalidNotificationConfig,
     NotificationForbidden,
     NotificationNotFound,
 )
-from app.domains.notifications.models import Notification
+from app.domains.notifications.models import Notification, NotificationType
 from app.domains.notifications.repository import NotificationRepository
 from app.domains.notifications.schemas import (
+    LibraryUpdate,
+    LunchUpdate,
     NotificationCreate,
-    NotificationUpdate,
-    validated_config_for,
+    TransitUpdate,
 )
 
 
@@ -38,17 +36,19 @@ class NotificationService:
         )
 
     async def update_for_user(
-        self, user_id: int, notification_id: int, body: NotificationUpdate
+        self,
+        user_id: int,
+        notification_id: int,
+        expected_type: NotificationType,
+        body: TransitUpdate | LunchUpdate | LibraryUpdate,
     ) -> Notification:
         notification = await self._get_owned(user_id, notification_id)
-        validated_config: dict | None = None
-        if body.config is not None:
-            try:
-                validated_config = validated_config_for(notification.type, body.config)
-            except ValidationError as exc:
-                raise InvalidNotificationConfig() from exc
+        # 다른 type 엔드포인트로 접근한 경우. 정보 누출 방지를 위해 404로 마스킹.
+        if notification.type != expected_type:
+            raise NotificationNotFound()
+        config = body.config.model_dump(mode="json") if body.config else None
         return await self._repository.update(
-            notification, enabled=body.enabled, config=validated_config
+            notification, enabled=body.enabled, config=config
         )
 
     async def delete_for_user(self, user_id: int, notification_id: int) -> None:

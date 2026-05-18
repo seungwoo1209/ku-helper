@@ -21,13 +21,16 @@ async def notification_factory(db_session: AsyncSession) -> NotificationFactory:
         if config is None:
             config = {
                 NotificationType.TRANSIT: {
+                    "mode": "arrival",
                     "station_name": "건대입구",
                     "line": "2",
+                    "minutes_before": 10,
                     "include_congestion": True,
                 },
                 NotificationType.LUNCH: {
                     "notify_at": "11:30:00",
                     "recommend_count": 3,
+                    "highlight_today_pick": True,
                 },
                 NotificationType.LIBRARY: {
                     "reading_room_id": "R-101",
