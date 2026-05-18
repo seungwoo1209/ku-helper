@@ -176,6 +176,80 @@ async def test_create_rejects_mismatched_config(
 
 
 # ---------------------------------------------------------------------------
+# Type별 list 엔드포인트
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_transit_only(
+    authed_client: tuple[AsyncClient, User],
+    notification_factory,
+) -> None:
+    """GET /transit는 같은 사용자의 TRANSIT 알림만 반환한다."""
+    client, user = authed_client
+    await notification_factory(user_id=user.id, type_=NotificationType.TRANSIT)
+    await notification_factory(user_id=user.id, type_=NotificationType.LUNCH)
+    await notification_factory(user_id=user.id, type_=NotificationType.LIBRARY)
+
+    response = await client.get(f"{_BASE}/transit")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["type"] == "TRANSIT"
+    assert body[0]["config"]["mode"] == "arrival"
+
+
+@pytest.mark.asyncio
+async def test_list_lunch_only(
+    authed_client: tuple[AsyncClient, User],
+    notification_factory,
+) -> None:
+    client, user = authed_client
+    await notification_factory(user_id=user.id, type_=NotificationType.TRANSIT)
+    await notification_factory(user_id=user.id, type_=NotificationType.LUNCH)
+
+    response = await client.get(f"{_BASE}/lunch")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["type"] == "LUNCH"
+
+
+@pytest.mark.asyncio
+async def test_list_library_empty(
+    authed_client: tuple[AsyncClient, User],
+    notification_factory,
+) -> None:
+    """다른 type만 있는 경우 LIBRARY list는 빈 배열."""
+    client, user = authed_client
+    await notification_factory(user_id=user.id, type_=NotificationType.TRANSIT)
+
+    response = await client.get(f"{_BASE}/library")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_list_transit_isolates_users(
+    client: AsyncClient,
+    user_factory,
+    notification_factory,
+) -> None:
+    """다른 사용자의 TRANSIT 알림은 노출되지 않는다."""
+    me = await user_factory(discord_username="me")
+    other = await user_factory(discord_username="other")
+    await notification_factory(user_id=other.id, type_=NotificationType.TRANSIT)
+
+    async def _override_get_current_user() -> User:
+        return me
+
+    app.dependency_overrides[get_current_user] = _override_get_current_user
+    response = await client.get(f"{_BASE}/transit")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+# ---------------------------------------------------------------------------
 # Read — discriminated union이 type별 정확한 스키마로 직렬화하는지
 # ---------------------------------------------------------------------------
 

@@ -23,6 +23,17 @@ class NotificationRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_by_user_and_type(
+        self, user_id: int, type_: NotificationType
+    ) -> list[Notification]:
+        stmt = (
+            select(Notification)
+            .where(Notification.user_id == user_id, Notification.type == type_)
+            .order_by(Notification.id)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_by_id(self, notification_id: int) -> Notification | None:
         stmt = select(Notification).where(Notification.id == notification_id)
         result = await self._session.execute(stmt)

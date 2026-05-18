@@ -12,6 +12,9 @@ from app.domains.notifications.schemas import (
     NotificationCreate,
     NotificationRead,
     TransitUpdate,
+    _LibraryRead,
+    _LunchRead,
+    _TransitRead,
     read_from_orm,
 )
 from app.domains.notifications.service import NotificationService
@@ -39,6 +42,42 @@ async def create_notification(
     """새 알림 설정을 생성한다. type별 config 스키마는 Swagger의 oneOf로 노출된다."""
     notification = await service.create_for_user(current_user.id, body)
     return read_from_orm(notification)
+
+
+@router.get("/transit", response_model=list[_TransitRead], status_code=200)
+async def list_transit_notifications(
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[NotificationService, Depends(get_notification_service)],
+) -> list[BaseModel]:
+    """현재 사용자의 교통 알림 설정만 반환한다."""
+    notifications = await service.list_for_user_by_type(
+        current_user.id, NotificationType.TRANSIT
+    )
+    return [read_from_orm(n) for n in notifications]
+
+
+@router.get("/lunch", response_model=list[_LunchRead], status_code=200)
+async def list_lunch_notifications(
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[NotificationService, Depends(get_notification_service)],
+) -> list[BaseModel]:
+    """현재 사용자의 점심 알림 설정만 반환한다."""
+    notifications = await service.list_for_user_by_type(
+        current_user.id, NotificationType.LUNCH
+    )
+    return [read_from_orm(n) for n in notifications]
+
+
+@router.get("/library", response_model=list[_LibraryRead], status_code=200)
+async def list_library_notifications(
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[NotificationService, Depends(get_notification_service)],
+) -> list[BaseModel]:
+    """현재 사용자의 도서관 알림 설정만 반환한다."""
+    notifications = await service.list_for_user_by_type(
+        current_user.id, NotificationType.LIBRARY
+    )
+    return [read_from_orm(n) for n in notifications]
 
 
 @router.get("/{notification_id}", response_model=NotificationRead, status_code=200)

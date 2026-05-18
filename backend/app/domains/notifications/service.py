@@ -19,6 +19,11 @@ class NotificationService:
     async def list_for_user(self, user_id: int) -> list[Notification]:
         return await self._repository.list_by_user(user_id)
 
+    async def list_for_user_by_type(
+        self, user_id: int, type_: NotificationType
+    ) -> list[Notification]:
+        return await self._repository.list_by_user_and_type(user_id, type_)
+
     async def get_for_user(self, user_id: int, notification_id: int) -> Notification:
         return await self._get_owned(user_id, notification_id)
 
