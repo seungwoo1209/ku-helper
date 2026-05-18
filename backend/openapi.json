@@ -286,6 +286,99 @@
         ]
       }
     },
+    "/api/v1/me/notifications/transit": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "List Transit Notifications",
+        "description": "현재 사용자의 교통 알림 설정만 반환한다.",
+        "operationId": "list_transit_notifications_api_v1_me_notifications_transit_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/_TransitRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Transit Notifications Api V1 Me Notifications Transit Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/notifications/lunch": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "List Lunch Notifications",
+        "description": "현재 사용자의 점심 알림 설정만 반환한다.",
+        "operationId": "list_lunch_notifications_api_v1_me_notifications_lunch_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/_LunchRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Lunch Notifications Api V1 Me Notifications Lunch Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/notifications/library": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "List Library Notifications",
+        "description": "현재 사용자의 도서관 알림 설정만 반환한다.",
+        "operationId": "list_library_notifications_api_v1_me_notifications_library_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/_LibraryRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Library Notifications Api V1 Me Notifications Library Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/me/notifications/{notification_id}": {
       "get": {
         "tags": [
