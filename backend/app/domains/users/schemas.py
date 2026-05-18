@@ -11,3 +11,8 @@ class UserRead(BaseModel):
     discord_username: str
     created_at: datetime
     updated_at: datetime
+
+
+class UserUpdate(BaseModel):
+    # TODO: 수정 가능한 필드는 후속 PR에서 정의.
+    pass

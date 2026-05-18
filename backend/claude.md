@@ -54,3 +54,9 @@ alembic/versions/      # 마이그레이션 파일
 @.claude/testing.md
 @.claude/code_style.md
 @.claude/security.md
+
+## Roadmap
+
+다음 백엔드 PR을 시작할 때는 잔여 작업·정책 미결 사항·잠재 부채를 먼저 확인한다.
+
+@.claude/roadmap.md

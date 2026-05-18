@@ -128,8 +128,10 @@ async def get_current_user(
     ],
 ) -> "User":
     # UserRepository는 호출 시점에 import (모듈 로드 시 도메인 결합 회피).
-    from app.domains.users.dependencies import get_user_repository
     from app.core.database import async_session_maker
+    from app.domains.users.dependencies import get_user_repository
+    from app.domains.users.exceptions import UserDeleted
+    from app.domains.users.models import UserStatus
 
     if credentials is None:
         raise AuthTokenMissing()
@@ -144,4 +146,6 @@ async def get_current_user(
         user = await repository.get_by_id(user_id)
     if user is None:
         raise CurrentUserNotFound()
+    if user.status == UserStatus.DELETED:
+        raise UserDeleted()
     return user
