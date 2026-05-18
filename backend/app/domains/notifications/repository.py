@@ -3,7 +3,11 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.notifications.models import Notification, NotificationType
+from app.domains.notifications.models import (
+    Notification,
+    NotificationHistory,
+    NotificationType,
+)
 
 
 class NotificationRepository:
@@ -61,5 +65,10 @@ class NotificationRepository:
 
     async def delete_all_for_user(self, user_id: int) -> None:
         stmt = delete(Notification).where(Notification.user_id == user_id)
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def delete_history_for_user(self, user_id: int) -> None:
+        stmt = delete(NotificationHistory).where(NotificationHistory.user_id == user_id)
         await self._session.execute(stmt)
         await self._session.flush()
