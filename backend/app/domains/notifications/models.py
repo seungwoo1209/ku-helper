@@ -67,6 +67,14 @@ class NotificationHistory(Base):
             "user_id",
             "sent_at",
         ),
+        # 부분 unique: 한 immediate_send_requests row 당 history 1건만 허용.
+        # NULL 은 정기 알림 발송이라 인덱스 대상에서 제외.
+        Index(
+            "uq_notification_history_immediate_send_request_id",
+            "immediate_send_request_id",
+            unique=True,
+            postgresql_where="immediate_send_request_id IS NOT NULL",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -75,6 +83,11 @@ class NotificationHistory(Base):
         ForeignKey("notifications.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    immediate_send_request_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("immediate_send_requests.id", ondelete="SET NULL"),
+        nullable=True,
     )
     user_id: Mapped[int] = mapped_column(
         Integer,

@@ -11,7 +11,7 @@
 ## DB 접근 권한 최소화
 
 - 봇 컨테이너용 DB 사용자는 백엔드와 별도(`bot_runner`). 인프라 레벨에서 다음 권한만 grant:
-  - `SELECT ON users, notifications`
+  - `SELECT ON users, notifications, notification_history`
   - `INSERT ON notification_history`
   - 시퀀스 `USAGE`(history PK 발급용)
 - UPDATE/DELETE 권한 자체가 없다. 코드에서도 호출 메서드를 정의하지 않는다.
@@ -41,6 +41,7 @@
 - 서울 공공 API 키·학교 사이트 인증 정보는 `SecretStr`.
 - 키가 URL query string에 포함되는 형태의 API라면 로그에서 마스킹(`url_template` 변수에 자리표시자만 둔다).
 - 외부 호출 timeout 명시. `httpx.AsyncClient(timeout=10.0)` 같이.
+- Subway API 키는 URL path 의 일부로 들어가므로 로그 출력 시 key 자리를 자리표시자로 마스킹한다.
 
 ## F-22 관리자 식별
 

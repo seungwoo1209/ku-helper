@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic-settings>=2.0",
     "structlog>=24.0",
+    "playwright>=1.44.0",
 ]
 
 [dependency-groups]
@@ -20,14 +21,27 @@ dev = [
     "mypy>=1.13",
     "pytest>=8",
     "pytest-asyncio>=0.24",
+    "respx>=0.21",
+    "time-machine>=2.14",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+# bot/__init__.py 가 origin/main 머지로 유입되며 bot/ 가 Python 패키지처럼 보이게 됨.
+# pytest collection 시 app/ 가 top-level 로 인식되지 않으므로 명시적으로 pythonpath 지정.
+pythonpath = ["."]
 
 [tool.mypy]
 strict = true
+# bot/__init__.py 가 머지(routes/lunch.py 부채)로 유입되며 bot/ 가 Python 패키지처럼
+# 보여 app.* 가 bot.app.* 로도 발견되는 중복이 발생. namespace 패키지 처리를 명시적으로.
+explicit_package_bases = true
+namespace_packages = true
 
 [[tool.mypy.overrides]]
 module = "apscheduler.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "playwright.*"
 ignore_missing_imports = true
