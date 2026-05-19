@@ -21,4 +21,4 @@ COPY --chown=bot:bot app ./app
 
 USER bot
 
-CMD ["uv", "run", "--no-dev", "python", "-m", "app.main"]
+CMD ["/app/.venv/bin/python", "-m", "app.main"]
