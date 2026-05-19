@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-19 (F-07 교통 정기 알림 종단 PR 완료, 다음은 §A-3 또는 F-06).
+마지막 갱신: 2026-05-19 (F-07 교통 정기 알림 종단 + worker 버그 2건 수정 완료, 실 DM 1건 발송 검증 완료. 다음은 §A-3 또는 F-06).
 
 ## 진행 상황 스냅샷
 
@@ -11,9 +11,12 @@
 - 스케줄러 골격(커밋 `d189b32`): `register_jobs` 가 알림 타입별 정적 폴링 잡 3종 등록 — TRANSIT/LIBRARY 5초, LUNCH 60초, `IntervalTrigger`+`max_instances=1`+`coalesce`+`misfire_grace_time=5`. 워커는 활성 구독 SELECT 후 count 로그만 — 조건 평가는 §B/§C/§D 에서.
 - §A-1 `DiscordBotClient.send_embed` (커밋 `c09030e`): `fetch_user → create_dm → channel.send`. `discord.HTTPException` 그대로 전파. `wait_until_ready()` 위임 메서드 포함.
 - §A-2 Sender 큐·워커 (커밋 `c09030e`): `asyncio.Queue[SendDmTask]` + 단일 워커. 이중 가드(ACTIVE 재검증) → DM → SUCCESS/FAILED history INSERT. 1 task = 1 트랜잭션. 회귀 가드 5건.
-- 테스트: 12 passing (`tests/scheduler/test_jobs.py` 3, `tests/core/test_discord.py` 3, `tests/notifications/test_sender.py` 6).
 - 도구: `bot-coder` 서브에이전트가 레포 루트 `.claude/agents/` 에 정의됨. 본 도메인 작업은 메인 세션이 위임.
-- F-07 교통 정기 알림 종단 (현재 PR): `SubwayClient` + `transit/worker.py` + `transit/embeds.py` + `JobContext` + lifespan httpx 클라이언트 + in-flight set. DB → 워커 → 큐 → DM 의 첫 실제 발송 검증.
+- F-07 교통 정기 알림 종단 (커밋 `6703ded`): `SubwayClient` + `transit/worker.py` + `transit/embeds.py` + `JobContext` + lifespan httpx 클라이언트 + in-flight set. DB → 워커 → 큐 → DM 경로 구축.
+- 서울 지하철 API 참고 문서 (커밋 `bb35e19`): `bot/docs/seoul_subway_realtime_arrival_api.md`. SubwayClient 의 필드 매핑·에러 코드·`subwayId` 호선 코드 1차 소스.
+- worker 버그 2건 수정 (커밋 `18668ce`): (1) `cfg.get("interval_minutes")` → `repeat_interval_minutes` 키 교정 — 기존엔 interval 가드가 비활성화돼 매 틱 재발송 위험. (2) UTC 문자열 사전식 비교 → KST `datetime.time` 객체 비교 (`zoneinfo.ZoneInfo("Asia/Seoul")` + `_parse_config_time` helper). 회귀 가드 2건 추가.
+- 실 DM 1건 발송 검증 (2026-05-19 18:24 KST): user_id=1 (`dogbugbaby`) 강남역 2호선 F-07 구독 → `transit_queued` → `dm_sent` → `notification_history` SUCCESS row 1건. 임베드 4 필드(내선/외선 각 2건).
+- 테스트: **33 passing** (이전 12 + F-07 19 + 버그 회귀 가드 2). 카테고리: `tests/scheduler/test_jobs.py`, `tests/core/test_discord.py`, `tests/notifications/test_sender.py`, `tests/crawlers/subway/test_client.py`, `tests/notifications/transit/test_worker.py`, `tests/notifications/transit/test_embeds.py`.
 
 인터페이스 합의 대기 (백엔드 결정 필요):
 - `notification_history.payload` JSONB 스키마 — backend roadmap §E-1. 현재는 임시 dict 로 INSERT 중.
@@ -28,6 +31,8 @@
 - Sender 워커가 `discord.DiscordException` 하위 전체를 동일 FAILED 로 처리 — `Forbidden`/`NotFound` 분기는 요구 시 추가.
 - F-07 발송 중복 방지가 메모리 set 의존 — 봇 재기동 시 첫 틱에서 history 가드만으로 보호. Redis 도입(§C-1) 시 분산 가능.
 - SubwayClient 가 Redis 캐시 없이 매 5초 틱마다 외부 API 호출. 같은 station 의 구독은 한 틱 내 dict 캐시로 호출 1회로 합쳐짐. 본격 부하 시 Redis TTL 캐시(§C-1) 도입.
+- 봇이 `notification.config` 를 raw `dict` 로 읽음 — Pydantic 검증 없음. 백엔드 스키마 키 이름 변경이 워커에서 silently fail 가능 (실제로 `repeat_interval_minutes` ↔ `interval_minutes` 회귀 발생). 후속 정리: `app/notifications/transit/config_parsers.py` 같은 봇 측 Pydantic 모델 도입 또는 backend 와 schema 공유 패키지.
+- transit 윈도우 비교가 KST 고정 (`zoneinfo.ZoneInfo("Asia/Seoul")`). 다국가 확장 시 사용자별 timezone 컬럼 필요 — 현재 단일 캠퍼스 한정이라 보류.
 
 ## §0. 부트스트랩 (3-PR 분량)
 
@@ -66,19 +71,20 @@
 
 ## §B. 첫 알림 흐름 — 교통 (가장 단순한 단일 경로)
 
-### B-1. Subway Crawler
-- `app/crawlers/subway/client.py`: 서울 공공 API 호출 + Redis TTL 캐시(키 `subway:{station}:{line}`, TTL 30초).
-- 응답을 `SubwayArrival` dataclass로 정규화. raw dict 반환 금지.
-**완료(현재 PR, Redis 캐시 미적용 — §C-1 도입 후 추가).**
+### B-1. Subway Crawler — 완료 (커밋 `6703ded`)
+- `app/crawlers/subway/client.py`: 서울 공공 API 호출. 응답을 `SubwayArrival` dataclass로 정규화. raw dict 반환 금지.
+- Redis TTL 캐시(키 `subway:{station}:{line}`, TTL 30초)는 **미적용** — §C-1 Redis 도입 후 추가.
+- API 키는 `Settings.subway_api_key: SecretStr` 로 격리. URL 로그 출력 시 마스킹.
 
-### B-2. Transit Worker
-- `app/notifications/transit/worker.py`: 활성 구독 → Subway Crawler 결과와 비교 → `build_transit_embed` → Sender 큐 적재.
-**완료(현재 PR, F-07 만). F-06 (arrival) 은 후속 PR.**
+### B-2. Transit Worker — 완료 (커밋 `6703ded` + 버그 수정 `18668ce`)
+- `app/notifications/transit/worker.py`: 활성 구독 → SubwayClient 결과 → `build_transit_recurring_embed` → Sender 큐 적재.
+- 현재 **F-07 (recurring) 만** 구현. F-06 (arrival) 은 후속 PR.
+- 윈도우 비교 KST 고정 (`Asia/Seoul`). interval 가드는 history 마지막 SUCCESS row + 메모리 in-flight set 이중.
 
-### B-3. APScheduler 잡 등록 — 부분 완료 (커밋 `d189b32`)
-- `register_jobs` 가 `run_transit_job`/`run_lunch_job`/`run_library_job` 을 이미 등록 — TRANSIT/LIBRARY 5초, LUNCH 60초 `IntervalTrigger`. 잡 옵션 `max_instances=1`, `coalesce=True`, `misfire_grace_time=5`.
-- 현재 worker 본체는 활성 구독 SELECT + count 로그만. Subway Crawler/조건 평가/임베드/큐 적재는 §B-1·§B-2 에서 채운다.
-- 이제 transit 잡이 실제로 SubwayClient 호출 + 큐 적재
+### B-3. APScheduler 잡 등록 — 완료 (커밋 `d189b32` + `6703ded`)
+- `register_jobs` 가 `run_transit_job`/`run_lunch_job`/`run_library_job` 을 모두 등록 — TRANSIT/LIBRARY 5초, LUNCH 60초 `IntervalTrigger`. 잡 옵션 `max_instances=1`, `coalesce=True`, `misfire_grace_time=5`.
+- transit 잡은 `JobContext` 를 `args=[ctx]` 로 받아 SubwayClient 호출 + 큐 적재까지 실 수행.
+- lunch/library 잡은 여전히 stub (활성 구독 count 로그만). §C/§D 에서 본체 구현.
 - 틱 주기 조정 가능 — TRANSIT/LIBRARY 부하 측정 후 5→10초 등 완화 검토.
 
 ### B-4. F-08 혼잡도·지연 정보 (우선순위: 중)
