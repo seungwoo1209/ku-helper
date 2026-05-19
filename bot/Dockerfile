@@ -13,8 +13,10 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN uv sync --no-dev --frozen || uv sync --no-dev
 
+RUN /app/.venv/bin/playwright install --with-deps chromium
+
 COPY --chown=bot:bot app ./app
 
 USER bot
 
-CMD ["uv", "run", "python", "-m", "app.main"]
+CMD ["uv", "run", "--no-dev", "python", "-m", "app.main"]
