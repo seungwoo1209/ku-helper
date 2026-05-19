@@ -19,6 +19,8 @@ RUN /app/.venv/bin/playwright install --with-deps chromium \
 
 COPY --chown=bot:bot app ./app
 
+RUN chown -R bot:bot /app
+
 USER bot
 
 CMD ["/app/.venv/bin/python", "-m", "app.main"]
