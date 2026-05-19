@@ -7,10 +7,11 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 
 from app.core.config import get_settings
-from app.core.database import engine
+from app.core.database import async_session_maker, engine
 from app.core.discord import DiscordBotClient
 from app.core.logging import configure_logging
 from app.core.redis import create_redis_client
+from app.notifications.sender import SendDmTask, run_sender_worker
 from app.scheduler.jobs import register_jobs
 
 # models 모듈은 Base.metadata에 테이블을 등록하기 위해 import만 해 두면 됨.
@@ -48,11 +49,20 @@ async def main() -> None:
     dc_client = discord.Client(intents=discord.Intents.default())
     dc_bot_client = DiscordBotClient(dc_client, settings)
 
+    # Sender 큐 + 워커 태스크. discord.Client.start() 는 블로킹이므로
+    # 워커를 먼저 task 로 띄운다. 워커 내부에서 wait_until_ready() 로 ready 대기.
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    sender_task = asyncio.create_task(
+        run_sender_worker(queue, dc_bot_client, async_session_maker)
+    )
+
     try:
         logger.info("discord_client_starting")
         await dc_bot_client.start()
     finally:
         logger.info("bot_shutdown_begin")
+        sender_task.cancel()
+        await asyncio.gather(sender_task, return_exceptions=True)
         scheduler.shutdown(wait=False)
         await dc_bot_client.close()
         if redis_client is not None:

@@ -30,3 +30,14 @@ class NotificationRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_user_status(self, user_id: int) -> UserStatus | None:
+        """user_id 에 해당하는 사용자의 status 를 반환한다.
+
+        사용자 행이 없으면 None 을 반환한다.
+        Sender 워커의 이중 가드(발송 직전 재검증)에서 사용.
+        """
+        stmt = select(User.status).where(User.id == user_id)
+        result = await self._session.execute(stmt)
+        row = result.scalar_one_or_none()
+        return row
