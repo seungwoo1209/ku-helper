@@ -10,3 +10,5 @@ os.environ.setdefault("DISCORD_BOT_TOKEN", "test-token")
 # F-07 SubwayClient 생성자가 subway_api_key 빈값이면 즉시 SubwayApiAuthFailed 를 raise.
 # 테스트에서는 유효 키 형식이기만 하면 되므로 더미 값을 사용한다.
 os.environ.setdefault("SUBWAY_API_KEY", "test-subway-key")
+# ADMIN_DISCORD_IDS 가 빈 문자열이면 list[int] 파싱이 실패하므로 빈 JSON 배열로 설정.
+os.environ.setdefault("ADMIN_DISCORD_IDS", "[]")

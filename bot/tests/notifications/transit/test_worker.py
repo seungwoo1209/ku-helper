@@ -2,6 +2,10 @@
 
 time-machine 으로 시각 고정, fake SubwayClient/Repository 를 monkeypatch 로 주입.
 APScheduler 를 거치지 않고 run_transit_job(ctx) 를 직접 await 한다.
+
+시각 고정 규칙:
+- freeze 시각은 KST 오프셋(+09:00)을 명시한 ISO 문자열 사용.
+- KST 08:00 = UTC 23:00 전일. 윈도우 비교가 KST 기준인지 검증할 때 이 차이를 이용한다.
 """
 
 import asyncio
@@ -129,7 +133,10 @@ def _make_ctx(
     )
 
 
-_FIXED_NOW = datetime(2026, 5, 19, 10, 0, 0, tzinfo=timezone.utc)
+# KST 2026-05-19 10:00:00 = UTC 2026-05-19 01:00:00
+_FIXED_KST = "2026-05-19T10:00:00+09:00"
+# UTC equivalent for use in last_sent_at calculations
+_FIXED_NOW_UTC = datetime(2026, 5, 19, 1, 0, 0, tzinfo=timezone.utc)
 
 # ---------------------------------------------------------------------------
 # 케이스 1: 윈도우 안 + 마지막 발송 없음 → 큐 1건 + in_flight set 1건
@@ -137,7 +144,7 @@ _FIXED_NOW = datetime(2026, 5, 19, 10, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
-@time_machine.travel(_FIXED_NOW, tick=False)
+@time_machine.travel(_FIXED_KST, tick=False)
 async def test_recurring_no_history_enqueues_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -151,7 +158,7 @@ async def test_recurring_no_history_enqueues_task(
             "mode": "recurring",
             "station_name": "강남",
             "line": "2호선",
-            "interval_minutes": 5,
+            "repeat_interval_minutes": 5,
         },
     )
     user = _FakeUser(id=1, discord_id=9999)
@@ -195,7 +202,7 @@ async def test_recurring_no_history_enqueues_task(
 
 
 @pytest.mark.asyncio
-@time_machine.travel(_FIXED_NOW, tick=False)
+@time_machine.travel(_FIXED_KST, tick=False)
 async def test_recurring_recent_history_skips(monkeypatch: pytest.MonkeyPatch) -> None:
     """마지막 발송이 interval 미만 전 → skip (큐 비어 있음)."""
     notif = _FakeNotification(
@@ -207,13 +214,13 @@ async def test_recurring_recent_history_skips(monkeypatch: pytest.MonkeyPatch) -
             "mode": "recurring",
             "station_name": "강남",
             "line": "2호선",
-            "interval_minutes": 10,
+            "repeat_interval_minutes": 10,
         },
     )
     user = _FakeUser(id=1, discord_id=9999)
 
     # 3분 전에 발송 → 10분 interval 미충족
-    last_sent = _FIXED_NOW - timedelta(minutes=3)
+    last_sent = _FIXED_NOW_UTC - timedelta(minutes=3)
     fake_client = _FakeSubwayClient([_make_arrival()], [])
 
     queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
@@ -239,14 +246,14 @@ async def test_recurring_recent_history_skips(monkeypatch: pytest.MonkeyPatch) -
 
 
 # ---------------------------------------------------------------------------
-# 케이스 3: now < start_time → skip
+# 케이스 3: KST now < start_time → skip
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@time_machine.travel(_FIXED_NOW, tick=False)
+@time_machine.travel(_FIXED_KST, tick=False)
 async def test_recurring_before_window_skips(monkeypatch: pytest.MonkeyPatch) -> None:
-    """현재 시각이 start_time 이전 → skip."""
+    """현재 KST 시각이 start_time 이전 → skip."""
     notif = _FakeNotification(
         id=12,
         user_id=1,
@@ -256,8 +263,8 @@ async def test_recurring_before_window_skips(monkeypatch: pytest.MonkeyPatch) ->
             "mode": "recurring",
             "station_name": "강남",
             "line": "2호선",
-            "interval_minutes": 5,
-            "start_time": "11:00",  # 현재(10:00) < 11:00 → skip
+            "repeat_interval_minutes": 5,
+            "start_time": "11:00:00",  # KST 현재(10:00) < 11:00 → skip
         },
     )
     user = _FakeUser(id=1, discord_id=9999)
@@ -281,14 +288,14 @@ async def test_recurring_before_window_skips(monkeypatch: pytest.MonkeyPatch) ->
 
 
 # ---------------------------------------------------------------------------
-# 케이스 4: now > end_time → skip
+# 케이스 4: KST now > end_time → skip
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@time_machine.travel(_FIXED_NOW, tick=False)
+@time_machine.travel(_FIXED_KST, tick=False)
 async def test_recurring_after_window_skips(monkeypatch: pytest.MonkeyPatch) -> None:
-    """현재 시각이 end_time 이후 → skip."""
+    """현재 KST 시각이 end_time 이후 → skip."""
     notif = _FakeNotification(
         id=13,
         user_id=1,
@@ -298,8 +305,8 @@ async def test_recurring_after_window_skips(monkeypatch: pytest.MonkeyPatch) -> 
             "mode": "recurring",
             "station_name": "강남",
             "line": "2호선",
-            "interval_minutes": 5,
-            "end_time": "09:00",  # 현재(10:00) > 09:00 → skip
+            "repeat_interval_minutes": 5,
+            "end_time": "09:00:00",  # KST 현재(10:00) > 09:00 → skip
         },
     )
     user = _FakeUser(id=1, discord_id=9999)
@@ -328,7 +335,7 @@ async def test_recurring_after_window_skips(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-@time_machine.travel(_FIXED_NOW, tick=False)
+@time_machine.travel(_FIXED_KST, tick=False)
 async def test_arrival_mode_skips(monkeypatch: pytest.MonkeyPatch) -> None:
     """mode == 'arrival' → skip (F-06 후속 PR)."""
     notif = _FakeNotification(
@@ -368,7 +375,7 @@ async def test_arrival_mode_skips(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-@time_machine.travel(_FIXED_NOW, tick=False)
+@time_machine.travel(_FIXED_KST, tick=False)
 async def test_same_station_fetches_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """같은 역의 구독 2건 → SubwayClient.fetch_arrivals 호출 1회."""
     notif1 = _FakeNotification(
@@ -380,7 +387,7 @@ async def test_same_station_fetches_once(monkeypatch: pytest.MonkeyPatch) -> Non
             "mode": "recurring",
             "station_name": "강남",
             "line": "2호선",
-            "interval_minutes": 0,
+            "repeat_interval_minutes": 0,
         },
     )
     notif2 = _FakeNotification(
@@ -392,7 +399,7 @@ async def test_same_station_fetches_once(monkeypatch: pytest.MonkeyPatch) -> Non
             "mode": "recurring",
             "station_name": "강남",
             "line": "9호선",
-            "interval_minutes": 0,
+            "repeat_interval_minutes": 0,
         },
     )
     user1 = _FakeUser(id=1, discord_id=1111)
@@ -448,7 +455,7 @@ async def test_same_station_fetches_once(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 @pytest.mark.asyncio
-@time_machine.travel(_FIXED_NOW, tick=False)
+@time_machine.travel(_FIXED_KST, tick=False)
 async def test_api_unavailable_swallowed_queue_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -462,7 +469,7 @@ async def test_api_unavailable_swallowed_queue_empty(
             "mode": "recurring",
             "station_name": "강남",
             "line": "2호선",
-            "interval_minutes": 0,
+            "repeat_interval_minutes": 0,
         },
     )
     user = _FakeUser(id=1, discord_id=9999)
@@ -488,3 +495,121 @@ async def test_api_unavailable_swallowed_queue_empty(
         await run_transit_job(ctx)
 
     assert queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# 회귀 가드 1: repeat_interval_minutes 키 이름 — 30초 전 발송 + 5분 interval → skip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_FIXED_KST, tick=False)
+async def test_regression_repeat_interval_minutes_key_is_respected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """repeat_interval_minutes 가드 동작 확인.
+
+    마지막 발송이 30초 전이고 repeat_interval_minutes=5(300초)이면 skip.
+    이 케이스가 fail 하면 config 키 이름 회귀('interval_minutes')가 재발한 것.
+    """
+    notif = _FakeNotification(
+        id=40,
+        user_id=1,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config={
+            "mode": "recurring",
+            "station_name": "강남",
+            "line": "2호선",
+            # 반드시 'repeat_interval_minutes' 키여야 가드가 활성화된다.
+            "repeat_interval_minutes": 5,
+        },
+    )
+    user = _FakeUser(id=1, discord_id=9999)
+
+    # 30초 전에 발송 → 5분(300초) interval 미충족
+    last_sent = _FIXED_NOW_UTC - timedelta(seconds=30)
+    fake_client = _FakeSubwayClient([_make_arrival()], [])
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_ctx(queue=queue)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif, user)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=last_sent),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings: fake_client,
+        )
+
+        await run_transit_job(ctx)
+
+    # 가드가 올바르게 동작하면 큐는 비어 있어야 한다.
+    assert queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# 회귀 가드 2: 타임존 비교가 KST 기준 — UTC 기준이면 윈도우 밖이지만 KST 기준이면 윈도우 안
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_regression_window_comparison_uses_kst(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """윈도우 비교가 KST 기준임을 검증한다.
+
+    KST 08:30 = UTC 전일 23:30. start=08:00, end=09:00(KST) 윈도우.
+    UTC 기준이라면 23:30 은 08:00~09:00 밖이지만, KST 기준이면 안이므로 enqueue 돼야 한다.
+    이 케이스가 fail 하면 UTC 기준 비교 회귀가 재발한 것.
+    """
+    # KST 2026-05-19 08:30:00 = UTC 2026-05-18 23:30:00
+    frozen_kst = "2026-05-19T08:30:00+09:00"
+
+    notif = _FakeNotification(
+        id=50,
+        user_id=1,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config={
+            "mode": "recurring",
+            "station_name": "강남",
+            "line": "2호선",
+            "repeat_interval_minutes": 0,
+            "start_time": "08:00:00",  # KST 기준
+            "end_time": "09:00:00",  # KST 기준
+        },
+    )
+    user = _FakeUser(id=1, discord_id=9999)
+
+    call_count: list[int] = []
+    fake_client = _FakeSubwayClient([_make_arrival()], call_count)
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_ctx(queue=queue)
+
+    with time_machine.travel(frozen_kst, tick=False):
+        with monkeypatch.context() as m:
+            m.setattr(
+                "app.notifications.transit.worker.NotificationRepository",
+                lambda session: _FakeNotificationRepo([(notif, user)]),
+            )
+            m.setattr(
+                "app.notifications.transit.worker.NotificationHistoryRepository",
+                lambda session: _FakeHistoryRepo(last_sent_at=None),
+            )
+            m.setattr(
+                "app.notifications.transit.worker.SubwayClient",
+                lambda http_client, settings: fake_client,
+            )
+
+            await run_transit_job(ctx)
+
+    # KST 08:30 은 08:00~09:00 윈도우 안이므로 큐에 적재돼야 한다.
+    assert queue.qsize() == 1

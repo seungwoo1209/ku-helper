@@ -5,6 +5,8 @@ F-18 활성 시간대·Redis 캐시는 후속 PR 에서 추가한다.
 """
 
 from datetime import datetime, timezone
+from datetime import time as datetime_time
+from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -20,6 +22,24 @@ from app.scheduler.context import JobContext
 
 _logger = structlog.get_logger(__name__)
 
+# 사용자가 입력한 start_time/end_time 은 KST 기준.
+_DISPLAY_TIMEZONE = ZoneInfo("Asia/Seoul")
+
+
+def _parse_config_time(raw: str | None) -> datetime_time | None:
+    """config JSONB 의 'HH:MM' 또는 'HH:MM:SS' 문자열 → datetime.time.
+
+    Pydantic time 직렬화는 HH:MM:SS, 사용자가 직접 INSERT 한 경우 HH:MM 도 허용.
+    """
+    if raw is None:
+        return None
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return None
+
 
 async def run_transit_job(ctx: JobContext) -> None:
     """TRANSIT 활성 구독을 폴링하여 F-07 조건 충족 시 Sender 큐에 적재한다.
@@ -29,6 +49,8 @@ async def run_transit_job(ctx: JobContext) -> None:
     - BotException(SubwayApiUnavailable 포함) → swallow + 로그. 그 외 예외 → 전파.
     """
     now = datetime.now(tz=timezone.utc)
+    # 윈도우 비교는 KST 기준. UTC now 는 interval 계산에도 그대로 사용.
+    now_kst_time = now.astimezone(_DISPLAY_TIMEZONE).time()
     subway_client = SubwayClient(ctx.http_client, ctx.settings)
 
     async with ctx.session_maker() as session:
@@ -52,47 +74,45 @@ async def run_transit_job(ctx: JobContext) -> None:
                 )
                 continue
 
-            # 윈도우(start_time/end_time) 검사. UTC HH:MM 문자열 비교.
-            start_time: str | None = cfg.get("start_time")
-            end_time: str | None = cfg.get("end_time")
-            if start_time is not None or end_time is not None:
-                now_hhmm = now.strftime("%H:%M")
-                if start_time is not None and now_hhmm < start_time:
-                    _logger.debug(
-                        "transit_skip_before_window",
-                        notification_id=notification.id,
-                        now_hhmm=now_hhmm,
-                        start_time=start_time,
-                    )
-                    continue
-                if end_time is not None and now_hhmm > end_time:
-                    _logger.debug(
-                        "transit_skip_after_window",
-                        notification_id=notification.id,
-                        now_hhmm=now_hhmm,
-                        end_time=end_time,
-                    )
-                    continue
+            # 윈도우(start_time/end_time) 검사. 사용자가 KST 기준으로 입력한 값과 비교.
+            start_time = _parse_config_time(cfg.get("start_time"))
+            end_time = _parse_config_time(cfg.get("end_time"))
+            if start_time is not None and now_kst_time < start_time:
+                _logger.debug(
+                    "transit_skip_before_window",
+                    notification_id=notification.id,
+                    now_kst_time=now_kst_time.isoformat(),
+                    start_time=start_time.isoformat(),
+                )
+                continue
+            if end_time is not None and now_kst_time > end_time:
+                _logger.debug(
+                    "transit_skip_after_window",
+                    notification_id=notification.id,
+                    now_kst_time=now_kst_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                )
+                continue
 
             # in_flight 체크: 이미 큐에 적재돼 처리 중인 구독 skip.
             if notification.id in ctx.in_flight_notification_ids:
                 _logger.debug("transit_skip_in_flight", notification_id=notification.id)
                 continue
 
-            # 마지막 발송 시각 체크 — interval_minutes 미만이면 skip.
-            interval_minutes: int = int(cfg.get("interval_minutes", 0))
-            if interval_minutes > 0:
+            # 마지막 발송 시각 체크 — repeat_interval_minutes 미만이면 skip.
+            repeat_interval_minutes: int = int(cfg.get("repeat_interval_minutes", 0))
+            if repeat_interval_minutes > 0:
                 last_sent_at = await history_repo.get_last_sent_at(
                     notification.id, NotificationDeliveryStatus.SUCCESS
                 )
                 if last_sent_at is not None:
                     elapsed_seconds = (now - last_sent_at).total_seconds()
-                    if elapsed_seconds < interval_minutes * 60:
+                    if elapsed_seconds < repeat_interval_minutes * 60:
                         _logger.debug(
                             "transit_skip_interval_not_elapsed",
                             notification_id=notification.id,
                             elapsed_seconds=elapsed_seconds,
-                            interval_seconds=interval_minutes * 60,
+                            interval_seconds=repeat_interval_minutes * 60,
                         )
                         continue
 
