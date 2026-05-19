@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { SectionHead, EmbedPreview } from '../components/ui';
 import RuleRow from '../components/RuleRow';
+import { updateNotification } from '../api/notifications';
 
 /* ─── 오늘의 점심 데이터 페치 훅 ───────────────────────── */
 function useTodayLunch() {
@@ -23,18 +24,18 @@ function useTodayLunch() {
 }
 
 /* ─── 학식 카드 (코너 페이지네이션) ────────────────────── */
-function CafeteriaCard({ cafeteria, loading, error, matchRef }) {
+function CafeteriaCard({ cafeteria, loading, error }) {
   const [idx, setIdx] = useState(0);
 
   if (loading) return (
-    <div className="lunch-card lunch-card--paged" ref={matchRef}>
+    <div className="lunch-card lunch-card--paged">
       <div className="lunch-card-shimmer" />
     </div>
   );
 
   if (error || !cafeteria) {
     return (
-      <div className="lunch-card lunch-card--paged lunch-card--error" ref={matchRef}>
+      <div className="lunch-card lunch-card--paged lunch-card--error">
         <div className="lunch-card-label">오늘의 학식</div>
         <div className="lunch-card-empty">메뉴를 불러올 수 없습니다</div>
         {error && <div className="lunch-card-sub">{error}</div>}
@@ -51,7 +52,7 @@ function CafeteriaCard({ cafeteria, loading, error, matchRef }) {
   const next = () => setIdx(i => (i + 1) % total);
 
   return (
-    <div className="lunch-card lunch-card--paged" ref={matchRef}>
+    <div className="lunch-card lunch-card--paged">
       {/* 헤더 */}
       <div className="lunch-card-label">오늘의 학식</div>
       <div className="lunch-card-title">{cafeteria.cafeteria}</div>
@@ -89,12 +90,12 @@ function CafeteriaCard({ cafeteria, loading, error, matchRef }) {
 }
 
 /* ─── 맛집 추천 카드 ────────────────────────────────────── */
-function RestaurantsCard({ restaurants, loading, error, matchRef }) {
-  if (loading) return <div className="lunch-card" ref={matchRef}><div className="lunch-card-shimmer" /></div>;
+function RestaurantsCard({ restaurants, loading, error }) {
+  if (loading) return <div className="lunch-card"><div className="lunch-card-shimmer" /></div>;
 
   if (error || !restaurants?.length) {
     return (
-      <div className="lunch-card lunch-card--error" ref={matchRef}>
+      <div className="lunch-card lunch-card--error">
         <div className="lunch-card-label">추천 맛집</div>
         <div className="lunch-card-empty">추천 정보를 불러올 수 없습니다</div>
       </div>
@@ -102,7 +103,7 @@ function RestaurantsCard({ restaurants, loading, error, matchRef }) {
   }
 
   return (
-    <div className="lunch-card" ref={matchRef}>
+    <div className="lunch-card">
       <div className="lunch-card-label">오늘의 추천 맛집</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 8 }}>
         {restaurants.map((r, i) => (
@@ -128,21 +129,20 @@ function RestaurantsCard({ restaurants, loading, error, matchRef }) {
 const LunchScreen = ({ state, setState, onEdit, onAdd }) => {
   const { data, loading, error, reload } = useTodayLunch();
 
-  // 오른쪽 카드 높이를 측정해 왼쪽 카드에 동일하게 적용
-  const rightRef = useRef(null);
-  const leftRef  = useRef(null);
-
-  useEffect(() => {
-    if (!rightRef.current || !leftRef.current) return;
-    const sync = () => {
-      const h = rightRef.current.offsetHeight;
-      if (h > 0) leftRef.current.style.height = h + 'px';
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(rightRef.current);
-    return () => ro.disconnect();
-  }, [data]);
+  async function handleToggle(id, enabled) {
+    setState(s => ({
+      ...s,
+      lunch: { ...s.lunch, rules: s.lunch.rules.map(x => x.id === id ? { ...x, on: enabled } : x) },
+    }));
+    try {
+      await updateNotification('lunch', id, { enabled });
+    } catch {
+      setState(s => ({
+        ...s,
+        lunch: { ...s.lunch, rules: s.lunch.rules.map(x => x.id === id ? { ...x, on: !enabled } : x) },
+      }));
+    }
+  }
 
   const cafeteria   = data?.cafeteria;
   const restaurants = data?.restaurants;
@@ -178,8 +178,8 @@ const LunchScreen = ({ state, setState, onEdit, onAdd }) => {
           </button>
         </div>
         <div className="lunch-live-grid">
-          <CafeteriaCard cafeteria={cafeteria} loading={loading} error={error} matchRef={leftRef} />
-          <RestaurantsCard restaurants={restaurants} loading={loading} error={error} matchRef={rightRef} />
+          <CafeteriaCard cafeteria={cafeteria} loading={loading} error={error} />
+          <RestaurantsCard restaurants={restaurants} loading={loading} error={error} />
         </div>
       </div>
 
@@ -188,13 +188,11 @@ const LunchScreen = ({ state, setState, onEdit, onAdd }) => {
         <div>
           <SectionHead title="알림 시각 & 식당" meta="평일 기준" />
           <div className="rules">
+            {state.lunch.rules.length === 0 && <div className="hint" style={{ padding: '20px 0' }}>등록된 점심 알림이 없습니다.</div>}
             {state.lunch.rules.map((r, i) => (
               <RuleRow key={r.id} idx={i + 1} title={r.name} sub={r.sub} conds={r.conds}
                        on={r.on}
-                       onToggle={(v) => setState(s => ({
-                         ...s,
-                         lunch: { ...s.lunch, rules: s.lunch.rules.map(x => x.id === r.id ? { ...x, on: v } : x) }
-                       }))}
+                       onToggle={(v) => handleToggle(r.id, v)}
                        onEdit={() => onEdit(r)} />
             ))}
           </div>

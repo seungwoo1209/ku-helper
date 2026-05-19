@@ -10,18 +10,62 @@ import HistoryScreen from './screens/HistoryScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import RuleEditModal from './screens/RuleEditModal';
 import { SAMPLE } from './data/sample';
+import { listNotifications, buildStateFromNotifications } from './api/notifications';
 
 const ROUTE_LABELS = {
   dashboard: "01 대시보드", transit: "02 교통", lunch: "03 점심",
   library: "04 도서관", history: "05 이력", settings: "06 설정",
 };
 
+const TOKEN_KEY = 'ku_access_token';
+
+async function fetchMe(token) {
+  const res = await fetch('/api/v1/users/me', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
 function App() {
-  const [authed, setAuthed] = useState(false);
+  const [user, setUser]     = useState(null);   // { id, discord_id, discord_username, ... }
+  const [authReady, setAuthReady] = useState(false);
   const [route, setRoute]   = useState("dashboard");
   const [state, setState]   = useState(SAMPLE);
   const [modal, setModal]   = useState(null);
   const [tweaksOpen, setTweaksOpen] = useState(false);
+
+  // OAuth 콜백 처리 + 기존 token 복원
+  useEffect(() => {
+    async function init() {
+      // 1. URL params에서 token 추출 (Discord OAuth 콜백 직후)
+      const params = new URLSearchParams(window.location.search);
+      const tokenFromUrl = params.get('access_token');
+      if (tokenFromUrl) {
+        localStorage.setItem(TOKEN_KEY, tokenFromUrl);
+        // URL에서 token 제거 (히스토리 오염 방지)
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+
+      // 2. localStorage에서 token 읽어 유저 정보 조회
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (token) {
+        const me = await fetchMe(token);
+        if (me) {
+          setUser(me);
+          try {
+            const notifications = await listNotifications();
+            setState(s => ({ ...s, ...buildStateFromNotifications(notifications) }));
+          } catch (_) { /* DB 미연결 등 실패 시 SAMPLE 유지 */ }
+        } else {
+          // token 만료 or 무효 → 제거
+          localStorage.removeItem(TOKEN_KEY);
+        }
+      }
+      setAuthReady(true);
+    }
+    init();
+  }, []);
 
   useEffect(() => {
     const onMsg = (e) => {
@@ -33,7 +77,20 @@ function App() {
     return () => window.removeEventListener('message', onMsg);
   }, []);
 
-  if (!authed) return <LoginScreen onLogin={() => setAuthed(true)} />;
+  function logout() {
+    localStorage.removeItem(TOKEN_KEY);
+    setUser(null);
+  }
+
+  if (!authReady) return null; // 초기화 중 빈 화면
+  if (!user) return <LoginScreen />;
+
+  const reloadNotifications = async () => {
+    try {
+      const notifications = await listNotifications();
+      setState(s => ({ ...s, ...buildStateFromNotifications(notifications) }));
+    } catch (_) {}
+  };
 
   const openRuleEditor = (kind, rule = null) => setModal({ kind, rule });
   const closeModal = () => setModal(null);
@@ -61,9 +118,9 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar route={route} setRoute={setRoute} />
+      <Sidebar route={route} setRoute={setRoute} user={user} onLogout={logout} />
       <main className="main" data-screen-label={ROUTE_LABELS[route] || route}>
-        <TopBar route={route} />
+        <TopBar route={route} user={user} />
         {body}
       </main>
 
@@ -72,13 +129,12 @@ function App() {
         kind={modal?.kind}
         rule={modal?.rule}
         onClose={closeModal}
-        onSave={() => closeModal()}
+        onSave={async () => { await reloadNotifications(); closeModal(); }}
       />
 
       {tweaksOpen && (
         <TweaksMini
           route={route} setRoute={setRoute}
-          authed={authed} setAuthed={setAuthed}
           onClose={() => {
             setTweaksOpen(false);
             window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
@@ -88,7 +144,7 @@ function App() {
   );
 }
 
-const TweaksMini = ({ route, setRoute, authed, setAuthed, onClose }) => (
+const TweaksMini = ({ route, setRoute, onClose }) => (
   <div style={{
     position: 'fixed', right: 24, bottom: 24,
     width: 280, background: 'var(--paper)',
@@ -106,11 +162,6 @@ const TweaksMini = ({ route, setRoute, authed, setAuthed, onClose }) => (
         {[['dashboard','대시보드'],['transit','교통'],['lunch','점심'],['library','도서관'],['history','이력'],['settings','설정']].map(([k, l]) => (
           <button key={k} className="chip" aria-pressed={route === k} onClick={() => setRoute(k)}>{l}</button>
         ))}
-      </div>
-      <div className="hint" style={{ marginBottom: 6 }}>인증 상태</div>
-      <div className="chips">
-        <button className="chip" aria-pressed={authed} onClick={() => setAuthed(true)}>로그인 후</button>
-        <button className="chip" aria-pressed={!authed} onClick={() => setAuthed(false)}>로그인 화면</button>
       </div>
     </div>
   </div>

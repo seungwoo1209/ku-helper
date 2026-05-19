@@ -1,8 +1,25 @@
 import { SectionHead, EmbedPreview } from '../components/ui';
 import RuleRow from '../components/RuleRow';
+import { updateNotification } from '../api/notifications';
 
 const TransitScreen = ({ state, setState, onEdit, onAdd }) => {
   const rules = state.transit.rules;
+
+  async function handleToggle(id, enabled) {
+    setState(s => ({
+      ...s,
+      transit: { ...s.transit, rules: s.transit.rules.map(x => x.id === id ? { ...x, on: enabled } : x) },
+    }));
+    try {
+      await updateNotification('transit', id, { enabled });
+    } catch {
+      setState(s => ({
+        ...s,
+        transit: { ...s.transit, rules: s.transit.rules.map(x => x.id === id ? { ...x, on: !enabled } : x) },
+      }));
+    }
+  }
+
   return (
     <>
       <div className="page-intro">
@@ -14,13 +31,11 @@ const TransitScreen = ({ state, setState, onEdit, onAdd }) => {
 
       <SectionHead title="규칙" meta={`${rules.length}개 · ${rules.filter(r => r.on).length}개 활성`} />
       <div className="rules">
+        {rules.length === 0 && <div className="hint" style={{ padding: '20px 0' }}>등록된 교통 알림이 없습니다.</div>}
         {rules.map((r, i) => (
           <RuleRow key={r.id} idx={i + 1} title={r.name} sub={r.sub} conds={r.conds}
                    on={r.on}
-                   onToggle={(v) => setState(s => ({
-                     ...s,
-                     transit: { ...s.transit, rules: s.transit.rules.map(x => x.id === r.id ? { ...x, on: v } : x) }
-                   }))}
+                   onToggle={(v) => handleToggle(r.id, v)}
                    onEdit={() => onEdit(r)} />
         ))}
       </div>

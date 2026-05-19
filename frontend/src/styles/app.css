@@ -877,6 +877,8 @@ button { font-family: inherit; color: inherit; }
 .lunch-card--paged {
   display: flex;
   flex-direction: column;
+  min-height: 320px;
+  max-height: 480px;
   overflow: hidden;
 }
 .lunch-card--error {

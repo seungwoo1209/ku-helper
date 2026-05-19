@@ -9,54 +9,68 @@ const NAV = [
   { id: "settings",  label: "설정",     icon: "settings" },
 ];
 
-const Sidebar = ({ route, setRoute }) => (
-  <aside className="sidebar">
-    <div className="brand">
-      <span className="brand-mark"></span>
-      <span className="brand-name">campus<b>알리미</b></span>
-    </div>
+const Sidebar = ({ route, setRoute, user, onLogout }) => {
+  const initial = user?.discord_username?.[0]?.toUpperCase() ?? '?';
+  const username = user?.discord_username ?? '알 수 없음';
 
-    <div className="nav-group">
-      <div className="nav-section-label">Workspace</div>
-      <div className="nav">
-        {NAV.slice(0, 4).map(item => (
-          <button key={item.id}
-                  className="nav-item"
-                  aria-current={route === item.id ? "page" : undefined}
-                  onClick={() => setRoute(item.id)}>
-            <Ico d={Icons[item.icon]} />
-            <span>{item.label}</span>
-            {item.count != null && <span className="count">{item.count}</span>}
-          </button>
-        ))}
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <span className="brand-mark"></span>
+        <span className="brand-name">campus<b>알리미</b></span>
       </div>
-    </div>
 
-    <div className="nav-group">
-      <div className="nav-section-label">Records</div>
-      <div className="nav">
-        {NAV.slice(4).map(item => (
-          <button key={item.id}
-                  className="nav-item"
-                  aria-current={route === item.id ? "page" : undefined}
-                  onClick={() => setRoute(item.id)}>
-            <Ico d={Icons[item.icon]} />
-            <span>{item.label}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-
-    <div className="sidebar-foot">
-      <div className="user">
-        <div className="avatar">서</div>
-        <div>
-          <div className="name">서지원</div>
-          <div className="handle">seojiwon · #4912</div>
+      <div className="nav-group">
+        <div className="nav-section-label">Workspace</div>
+        <div className="nav">
+          {NAV.slice(0, 4).map(item => (
+            <button key={item.id}
+                    className="nav-item"
+                    aria-current={route === item.id ? "page" : undefined}
+                    onClick={() => setRoute(item.id)}>
+              <Ico d={Icons[item.icon]} />
+              <span>{item.label}</span>
+              {item.count != null && <span className="count">{item.count}</span>}
+            </button>
+          ))}
         </div>
       </div>
-    </div>
-  </aside>
-);
+
+      <div className="nav-group">
+        <div className="nav-section-label">Records</div>
+        <div className="nav">
+          {NAV.slice(4).map(item => (
+            <button key={item.id}
+                    className="nav-item"
+                    aria-current={route === item.id ? "page" : undefined}
+                    onClick={() => setRoute(item.id)}>
+              <Ico d={Icons[item.icon]} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="sidebar-foot">
+        <div className="user">
+          <div className="avatar" style={{ background: '#5865F2', color: '#fff' }}>{initial}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="name">{username}</div>
+            <div className="handle">Discord</div>
+          </div>
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              title="로그아웃"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-50)', fontSize: 14, padding: '2px 4px' }}
+            >
+              ↩
+            </button>
+          )}
+        </div>
+      </div>
+    </aside>
+  );
+};
 
 export default Sidebar;
