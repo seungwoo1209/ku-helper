@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 .env
 data/*.json
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
