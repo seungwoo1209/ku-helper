@@ -1,22 +1,170 @@
-import { useState } from 'react'
-import './App.css'
-import HealthCheck from './HealthCheck'
+import { useState, useEffect } from 'react';
+import Sidebar from './components/Sidebar';
+import TopBar from './components/TopBar';
+import LoginScreen from './components/LoginScreen';
+import DashboardScreen from './screens/DashboardScreen';
+import TransitScreen from './screens/TransitScreen';
+import LunchScreen from './screens/LunchScreen';
+import LibraryScreen from './screens/LibraryScreen';
+import HistoryScreen from './screens/HistoryScreen';
+import SettingsScreen from './screens/SettingsScreen';
+import RuleEditModal from './screens/RuleEditModal';
+import { SAMPLE } from './data/sample';
+import { listNotifications, buildStateFromNotifications } from './api/notifications';
 
-function App() {
-  const [showHealth, setShowHealth] = useState(false)
+const ROUTE_LABELS = {
+  dashboard: "01 대시보드", transit: "02 교통", lunch: "03 점심",
+  library: "04 도서관", history: "05 이력", settings: "06 설정",
+};
 
-  return (
-    <>
-      <div>
-        <h1>KU Helper</h1>
-        <button onClick={() => setShowHealth(!showHealth)}>
-          {showHealth ? 'Hide' : 'Show'} Health Check
-        </button>
-      </div>
-      
-      {showHealth && <HealthCheck />}
-    </>
-  )
+const TOKEN_KEY = 'ku_access_token';
+
+async function fetchMe(token) {
+  const res = await fetch('/api/v1/users/me', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  return res.json();
 }
 
-export default App
+function App() {
+  const [user, setUser]     = useState(null);   // { id, discord_id, discord_username, ... }
+  const [authReady, setAuthReady] = useState(false);
+  const [route, setRoute]   = useState("dashboard");
+  const [state, setState]   = useState(SAMPLE);
+  const [modal, setModal]   = useState(null);
+  const [tweaksOpen, setTweaksOpen] = useState(false);
+
+  // OAuth 콜백 처리 + 기존 token 복원
+  useEffect(() => {
+    async function init() {
+      // 1. URL params에서 token 추출 (Discord OAuth 콜백 직후)
+      const params = new URLSearchParams(window.location.search);
+      const tokenFromUrl = params.get('access_token');
+      if (tokenFromUrl) {
+        localStorage.setItem(TOKEN_KEY, tokenFromUrl);
+        // URL에서 token 제거 (히스토리 오염 방지)
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+
+      // 2. localStorage에서 token 읽어 유저 정보 조회
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (token) {
+        const me = await fetchMe(token);
+        if (me) {
+          setUser(me);
+          try {
+            const notifications = await listNotifications();
+            setState(s => ({ ...s, ...buildStateFromNotifications(notifications) }));
+          } catch (_) { /* DB 미연결 등 실패 시 SAMPLE 유지 */ }
+        } else {
+          // token 만료 or 무효 → 제거
+          localStorage.removeItem(TOKEN_KEY);
+        }
+      }
+      setAuthReady(true);
+    }
+    init();
+  }, []);
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.data?.type === '__activate_edit_mode') setTweaksOpen(true);
+      else if (e.data?.type === '__deactivate_edit_mode') setTweaksOpen(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  function logout() {
+    localStorage.removeItem(TOKEN_KEY);
+    setUser(null);
+  }
+
+  if (!authReady) return null; // 초기화 중 빈 화면
+  if (!user) return <LoginScreen />;
+
+  const reloadNotifications = async () => {
+    try {
+      const notifications = await listNotifications();
+      setState(s => ({ ...s, ...buildStateFromNotifications(notifications) }));
+    } catch (_) {}
+  };
+
+  const openRuleEditor = (kind, rule = null) => setModal({ kind, rule });
+  const closeModal = () => setModal(null);
+
+  let body;
+  if (route === "dashboard") {
+    body = <DashboardScreen state={state} setState={setState} openRule={(k) => setRoute(k)} />;
+  } else if (route === "transit") {
+    body = <TransitScreen state={state} setState={setState}
+              onEdit={(r) => openRuleEditor('transit', r)}
+              onAdd={() => openRuleEditor('transit', null)} />;
+  } else if (route === "lunch") {
+    body = <LunchScreen state={state} setState={setState}
+              onEdit={(r) => openRuleEditor('lunch', r)}
+              onAdd={() => openRuleEditor('lunch', null)} />;
+  } else if (route === "library") {
+    body = <LibraryScreen state={state} setState={setState}
+              onEdit={(r) => openRuleEditor('library', r)}
+              onAdd={() => openRuleEditor('library', null)} />;
+  } else if (route === "history") {
+    body = <HistoryScreen state={state} />;
+  } else if (route === "settings") {
+    body = <SettingsScreen state={state} setState={setState} />;
+  }
+
+  return (
+    <div className="app">
+      <Sidebar route={route} setRoute={setRoute} user={user} onLogout={logout} />
+      <main className="main" data-screen-label={ROUTE_LABELS[route] || route}>
+        <TopBar route={route} user={user} />
+        {body}
+      </main>
+
+      <RuleEditModal
+        open={!!modal}
+        kind={modal?.kind}
+        rule={modal?.rule}
+        onClose={closeModal}
+        onSave={async () => { await reloadNotifications(); closeModal(); }}
+      />
+
+      {tweaksOpen && (
+        <TweaksMini
+          route={route} setRoute={setRoute}
+          onClose={() => {
+            setTweaksOpen(false);
+            window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
+          }} />
+      )}
+    </div>
+  );
+}
+
+const TweaksMini = ({ route, setRoute, onClose }) => (
+  <div style={{
+    position: 'fixed', right: 24, bottom: 24,
+    width: 280, background: 'var(--paper)',
+    border: '1px solid var(--rule)', borderRadius: 10,
+    boxShadow: '0 12px 36px -12px rgba(17,38,17,.3)',
+    zIndex: 100, overflow: 'hidden'
+  }}>
+    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--rule)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--ink-50)' }}>Tweaks</span>
+      <button onClick={onClose} style={{ background: 'none', border: 0, color: 'var(--ink-50)', cursor: 'pointer', fontSize: 16 }}>×</button>
+    </div>
+    <div style={{ padding: 14 }}>
+      <div className="hint" style={{ marginBottom: 6 }}>화면</div>
+      <div className="chips" style={{ marginBottom: 14 }}>
+        {[['dashboard','대시보드'],['transit','교통'],['lunch','점심'],['library','도서관'],['history','이력'],['settings','설정']].map(([k, l]) => (
+          <button key={k} className="chip" aria-pressed={route === k} onClick={() => setRoute(k)}>{l}</button>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
+export default App;
