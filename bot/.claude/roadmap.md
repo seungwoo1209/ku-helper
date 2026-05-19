@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-19 (§A-2까지 완료, 다음은 §A-3 F-21 재시도).
+마지막 갱신: 2026-05-19 (F-07 교통 정기 알림 종단 PR 완료, 다음은 §A-3 또는 F-06).
 
 ## 진행 상황 스냅샷
 
@@ -13,6 +13,7 @@
 - §A-2 Sender 큐·워커 (커밋 `c09030e`): `asyncio.Queue[SendDmTask]` + 단일 워커. 이중 가드(ACTIVE 재검증) → DM → SUCCESS/FAILED history INSERT. 1 task = 1 트랜잭션. 회귀 가드 5건.
 - 테스트: 12 passing (`tests/scheduler/test_jobs.py` 3, `tests/core/test_discord.py` 3, `tests/notifications/test_sender.py` 6).
 - 도구: `bot-coder` 서브에이전트가 레포 루트 `.claude/agents/` 에 정의됨. 본 도메인 작업은 메인 세션이 위임.
+- F-07 교통 정기 알림 종단 (현재 PR): `SubwayClient` + `transit/worker.py` + `transit/embeds.py` + `JobContext` + lifespan httpx 클라이언트 + in-flight set. DB → 워커 → 큐 → DM 의 첫 실제 발송 검증.
 
 인터페이스 합의 대기 (백엔드 결정 필요):
 - `notification_history.payload` JSONB 스키마 — backend roadmap §E-1. 현재는 임시 dict 로 INSERT 중.
@@ -25,6 +26,8 @@
 - DM 채널 캐시 미구현 — 매 발송 `fetch_user + create_dm`. 부하 측정 후 별도 PR.
 - §A-1 의 명시적 429 Retry-After/재시도는 §A-3 로 이관. 현재는 discord.py 내장 핸들러에만 의존.
 - Sender 워커가 `discord.DiscordException` 하위 전체를 동일 FAILED 로 처리 — `Forbidden`/`NotFound` 분기는 요구 시 추가.
+- F-07 발송 중복 방지가 메모리 set 의존 — 봇 재기동 시 첫 틱에서 history 가드만으로 보호. Redis 도입(§C-1) 시 분산 가능.
+- SubwayClient 가 Redis 캐시 없이 매 5초 틱마다 외부 API 호출. 같은 station 의 구독은 한 틱 내 dict 캐시로 호출 1회로 합쳐짐. 본격 부하 시 Redis TTL 캐시(§C-1) 도입.
 
 ## §0. 부트스트랩 (3-PR 분량)
 
@@ -66,13 +69,16 @@
 ### B-1. Subway Crawler
 - `app/crawlers/subway/client.py`: 서울 공공 API 호출 + Redis TTL 캐시(키 `subway:{station}:{line}`, TTL 30초).
 - 응답을 `SubwayArrival` dataclass로 정규화. raw dict 반환 금지.
+**완료(현재 PR, Redis 캐시 미적용 — §C-1 도입 후 추가).**
 
 ### B-2. Transit Worker
 - `app/notifications/transit/worker.py`: 활성 구독 → Subway Crawler 결과와 비교 → `build_transit_embed` → Sender 큐 적재.
+**완료(현재 PR, F-07 만). F-06 (arrival) 은 후속 PR.**
 
 ### B-3. APScheduler 잡 등록 — 부분 완료 (커밋 `d189b32`)
 - `register_jobs` 가 `run_transit_job`/`run_lunch_job`/`run_library_job` 을 이미 등록 — TRANSIT/LIBRARY 5초, LUNCH 60초 `IntervalTrigger`. 잡 옵션 `max_instances=1`, `coalesce=True`, `misfire_grace_time=5`.
 - 현재 worker 본체는 활성 구독 SELECT + count 로그만. Subway Crawler/조건 평가/임베드/큐 적재는 §B-1·§B-2 에서 채운다.
+- 이제 transit 잡이 실제로 SubwayClient 호출 + 큐 적재
 - 틱 주기 조정 가능 — TRANSIT/LIBRARY 부하 측정 후 5→10초 등 완화 검토.
 
 ### B-4. F-08 혼잡도·지연 정보 (우선순위: 중)
@@ -143,7 +149,7 @@
 
 ## 권장 순서
 
-**§0 → §A-1 → §A-2 (완료) → §A-3 (다음) → §B → §C → §D → §E → §F → §G**
+**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 → §B(F-06) → §C/§D → §E → §F → §G**
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 

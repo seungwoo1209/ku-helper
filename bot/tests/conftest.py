@@ -7,3 +7,6 @@ os.environ.setdefault(
     "postgresql+asyncpg://test:test@localhost:5432/test",
 )
 os.environ.setdefault("DISCORD_BOT_TOKEN", "test-token")
+# F-07 SubwayClient 생성자가 subway_api_key 빈값이면 즉시 SubwayApiAuthFailed 를 raise.
+# 테스트에서는 유효 키 형식이기만 하면 되므로 더미 값을 사용한다.
+os.environ.setdefault("SUBWAY_API_KEY", "test-subway-key")

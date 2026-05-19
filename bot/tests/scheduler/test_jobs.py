@@ -1,6 +1,13 @@
+import asyncio
+from unittest.mock import MagicMock
+
+import httpx
+import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from pydantic import SecretStr
 
+from app.scheduler.context import JobContext
 from app.scheduler.jobs import (
     LIBRARY_TICK_SECONDS,
     LUNCH_TICK_SECONDS,
@@ -15,17 +22,32 @@ _EXPECTED_INTERVAL_SECONDS = {
 }
 
 
-def test_register_jobs_registers_three_polling_jobs() -> None:
+@pytest.fixture
+def job_ctx() -> JobContext:
+    """dummy JobContext 픽스처 — 잡 등록 검증에서만 사용, 실제 실행 안 함."""
+    settings = MagicMock()
+    settings.subway_api_key = SecretStr("test-key")
+
+    return JobContext(
+        queue=asyncio.Queue(),
+        http_client=httpx.AsyncClient(),
+        session_maker=MagicMock(),
+        settings=settings,
+        in_flight_notification_ids=set(),
+    )
+
+
+def test_register_jobs_registers_three_polling_jobs(job_ctx: JobContext) -> None:
     scheduler = AsyncIOScheduler()
-    register_jobs(scheduler)
+    register_jobs(scheduler, job_ctx)
 
     job_ids = {job.id for job in scheduler.get_jobs()}
     assert job_ids == set(_EXPECTED_INTERVAL_SECONDS)
 
 
-def test_register_jobs_uses_expected_intervals() -> None:
+def test_register_jobs_uses_expected_intervals(job_ctx: JobContext) -> None:
     scheduler = AsyncIOScheduler()
-    register_jobs(scheduler)
+    register_jobs(scheduler, job_ctx)
 
     for job in scheduler.get_jobs():
         # 트리거가 IntervalTrigger인지 + 주기가 모듈 상수와 일치하는지 동시에 회귀 가드.
@@ -34,9 +56,9 @@ def test_register_jobs_uses_expected_intervals() -> None:
         assert job.trigger.interval.total_seconds() == expected
 
 
-def test_register_jobs_sets_overlap_and_misfire_guards() -> None:
+def test_register_jobs_sets_overlap_and_misfire_guards(job_ctx: JobContext) -> None:
     scheduler = AsyncIOScheduler()
-    register_jobs(scheduler)
+    register_jobs(scheduler, job_ctx)
 
     for job in scheduler.get_jobs():
         # max_instances=1: 짧은 틱 환경에서 이전 잡과 겹쳐 실행되는 회귀 방지.

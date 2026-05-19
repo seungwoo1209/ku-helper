@@ -43,6 +43,7 @@ async def run_sender_worker(
     queue: asyncio.Queue[SendDmTask],
     discord_client: DiscordBotClient,
     session_maker: async_sessionmaker[AsyncSession],
+    in_flight_notification_ids: set[int] | None = None,
 ) -> None:
     """Sender 큐를 소비하는 워커 코루틴.
 
@@ -51,9 +52,16 @@ async def run_sender_worker(
 
     CancelledError 는 lifespan 종료 신호이므로 swallow 하지 않고 전파.
     그 외 예외는 워커가 죽지 않도록 catch 해 로깅 + FAILED INSERT 후 계속.
+
+    in_flight_notification_ids: Worker 가 중복 발송 방지를 위해 관리하는 set.
+      처리 완료(성공·실패 불문) 후 finally 에서 discard.
     """
     # discord.Client 가 ready 될 때까지 대기.
     await discord_client.wait_until_ready()
+
+    _in_flight = (
+        in_flight_notification_ids if in_flight_notification_ids is not None else set()
+    )
 
     while True:
         task = await queue.get()
@@ -69,6 +77,8 @@ async def run_sender_worker(
             _logger.exception("sender_worker_unexpected", user_id=task.user_id)
         finally:
             queue.task_done()
+            if task.notification_id is not None:
+                _in_flight.discard(task.notification_id)
 
 
 async def _process_task(

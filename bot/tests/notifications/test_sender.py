@@ -77,7 +77,7 @@ def dc_channel() -> AsyncMock:
 
 
 @pytest.fixture
-def discord_client(dc_channel: AsyncMock) -> MagicMock:
+def discord_client(dc_channel: AsyncMock) -> Any:
     dc_user = AsyncMock(spec=discord.User)
     dc_user.create_dm.return_value = dc_channel
 
@@ -142,7 +142,12 @@ async def _run_worker_with_task(
         ),
     ):
         worker = asyncio.create_task(
-            run_sender_worker(queue, discord_client, _FakeSessionMaker())  # type: ignore[arg-type]
+            run_sender_worker(
+                queue,
+                discord_client,
+                _FakeSessionMaker(),  # type: ignore[arg-type]
+                in_flight_notification_ids=set(),
+            )
         )
         await queue.put(task)
         await queue.join()
@@ -248,6 +253,60 @@ async def test_successful_send_inserts_success_history(
 # ---------------------------------------------------------------------------
 # NotificationHistoryRepository INSERT 시그니처 검증
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_in_flight_set_discarded_after_processing(
+    discord_client: Any,
+    dc_channel: AsyncMock,
+) -> None:
+    """notification_id 가 in_flight set 에 있는 상태로 task 처리 → 처리 후 set 에서 제거."""
+    task = _make_task()
+    history_repo = _FakeHistoryRepo()
+    notification_repo = _FakeNotificationRepo(UserStatus.ACTIVE)
+    in_flight: set[int] = {task.notification_id}  # type: ignore[arg-type]
+
+    class _FakeSession:
+        async def __aenter__(self) -> "_FakeSession":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def commit(self) -> None:
+            pass
+
+    class _FakeSessionMaker:
+        def __call__(self) -> "_FakeSession":
+            return _FakeSession()
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+
+    with (
+        patch(
+            "app.notifications.sender.NotificationHistoryRepository",
+            return_value=history_repo,
+        ),
+        patch(
+            "app.notifications.sender.NotificationRepository",
+            return_value=notification_repo,
+        ),
+    ):
+        worker = asyncio.create_task(
+            run_sender_worker(
+                queue,
+                discord_client,
+                _FakeSessionMaker(),  # type: ignore[arg-type]
+                in_flight_notification_ids=in_flight,
+            )
+        )
+        await queue.put(task)
+        await queue.join()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    # 처리 완료 후 in_flight 에서 제거돼야 한다.
+    assert task.notification_id not in in_flight
 
 
 @pytest.mark.asyncio
