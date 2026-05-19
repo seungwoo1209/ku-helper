@@ -6,14 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN pip install --no-cache-dir uv
 
+RUN useradd --create-home --shell /bin/bash bot
+
 WORKDIR /app
 
 COPY pyproject.toml ./
 RUN uv sync --no-dev --frozen || uv sync --no-dev
 
-COPY app ./app
+COPY --chown=bot:bot app ./app
 
-RUN useradd --create-home --shell /bin/bash bot
 USER bot
 
 CMD ["uv", "run", "python", "-m", "app.main"]
