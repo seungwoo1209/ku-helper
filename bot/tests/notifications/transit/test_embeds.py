@@ -72,20 +72,20 @@ def test_build_transit_recurring_embed_with_arrivals() -> None:
     d = embed.to_dict()
 
     # title 검증
-    assert d["title"] == _EMBED_TITLE_TEMPLATE.format(station_name="강남", line="2호선")
+    assert d["title"] == _EMBED_TITLE_TEMPLATE.format(station_name="강남", line="2호선") # type: ignore
 
     # fields 가 2개 (상행 1건 + 하행 1건)
     assert len(d.get("fields", [])) == 2
 
     # 첫 번째 field: 상행
-    first_field = d["fields"][0]
+    first_field = d["fields"][0] # type: ignore
     assert "상행" in first_field["name"]
     assert "성수" in first_field["name"]
     # arrival_message_detail 이 있으면 그것을 사용
     assert first_field["value"] == "강남 도착"
 
     # 두 번째 field: 하행, arrival_message_detail 없음 → 분 환산
-    second_field = d["fields"][1]
+    second_field = d["fields"][1] # type: ignore
     assert "하행" in second_field["name"]
     expected_minutes = math.ceil(300 / 60)
     assert f"{expected_minutes}분 후" in second_field["value"]
