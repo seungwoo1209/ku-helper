@@ -32,7 +32,9 @@ _MAX_ATTEMPTS: int = len(RETRY_BACKOFF_SECONDS) + 1
 class SendDmTask:
     """Sender 큐에 적재되는 발송 작업.
 
-    notification_id 가 None 인 경우는 관리자 알림(F-22) 등 알림 행이 없는 케이스.
+    notification_id 가 None 인 경우는 관리자 알림(F-22) 또는 즉시 발송 (immediate_send).
+    immediate_send_request_id 가 set 이면 즉시 발송 — notification_id 는 None.
+    둘 다 None 인 경우는 관리자 알림.
     embed 는 discord.Embed(가변 객체)이므로 compare=False 로 처리해
     frozen=True 의 hash 충돌을 방지한다.
     payload 는 notification_history.payload JSONB 로 저장되는 임베드 스냅샷 dict.
@@ -43,6 +45,7 @@ class SendDmTask:
     discord_id: int
     embed: discord.Embed = field(compare=False)
     payload: dict[str, Any]
+    immediate_send_request_id: int | None = None
 
 
 async def run_sender_worker(
@@ -50,6 +53,7 @@ async def run_sender_worker(
     discord_client: DiscordBotClient,
     session_maker: async_sessionmaker[AsyncSession],
     in_flight_notification_ids: set[int] | None = None,
+    lunch_inflight: set[int] | None = None,
 ) -> None:
     """Sender 큐를 소비하는 워커 코루틴.
 
@@ -68,6 +72,7 @@ async def run_sender_worker(
     _in_flight = (
         in_flight_notification_ids if in_flight_notification_ids is not None else set()
     )
+    _lunch_inflight = lunch_inflight if lunch_inflight is not None else set()
 
     while True:
         task = await queue.get()
@@ -85,6 +90,8 @@ async def run_sender_worker(
             queue.task_done()
             if task.notification_id is not None:
                 _in_flight.discard(task.notification_id)
+            if task.immediate_send_request_id is not None:
+                _lunch_inflight.discard(task.immediate_send_request_id)
 
 
 async def _process_task(
@@ -107,6 +114,7 @@ async def _process_task(
             )
             await history_repo.insert_result(
                 notification_id=task.notification_id,
+                immediate_send_request_id=task.immediate_send_request_id,
                 user_id=task.user_id,
                 status=NotificationDeliveryStatus.FAILED,
                 payload=task.payload,
@@ -143,6 +151,7 @@ async def _process_task(
                 )
                 await history_repo.insert_result(
                     notification_id=task.notification_id,
+                    immediate_send_request_id=task.immediate_send_request_id,
                     user_id=task.user_id,
                     status=NotificationDeliveryStatus.FAILED,
                     payload=task.payload,
@@ -154,6 +163,7 @@ async def _process_task(
         if succeeded:
             await history_repo.insert_result(
                 notification_id=task.notification_id,
+                immediate_send_request_id=task.immediate_send_request_id,
                 user_id=task.user_id,
                 status=NotificationDeliveryStatus.SUCCESS,
                 payload=task.payload,
@@ -164,6 +174,7 @@ async def _process_task(
                 user_id=task.user_id,
                 discord_id=task.discord_id,
                 notification_id=task.notification_id,
+                immediate_send_request_id=task.immediate_send_request_id,
             )
         else:
             # 모든 시도 실패 — last_exc 가 반드시 존재 (succeeded=False 이면 최소 1회 except).
@@ -173,10 +184,12 @@ async def _process_task(
                 user_id=task.user_id,
                 discord_id=task.discord_id,
                 notification_id=task.notification_id,
+                immediate_send_request_id=task.immediate_send_request_id,
                 reason=failure_reason,
             )
             await history_repo.insert_result(
                 notification_id=task.notification_id,
+                immediate_send_request_id=task.immediate_send_request_id,
                 user_id=task.user_id,
                 status=NotificationDeliveryStatus.FAILED,
                 payload=task.payload,

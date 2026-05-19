@@ -9,6 +9,7 @@ from pydantic import SecretStr
 
 from app.scheduler.context import JobContext
 from app.scheduler.jobs import (
+    IMMEDIATE_SEND_TICK_SECONDS,
     LIBRARY_TICK_SECONDS,
     LUNCH_TICK_SECONDS,
     TRANSIT_TICK_SECONDS,
@@ -19,6 +20,7 @@ _EXPECTED_INTERVAL_SECONDS = {
     "transit_poll": TRANSIT_TICK_SECONDS,
     "lunch_poll": LUNCH_TICK_SECONDS,
     "library_poll": LIBRARY_TICK_SECONDS,
+    "immediate_send_lunch_poll": IMMEDIATE_SEND_TICK_SECONDS,
 }
 
 
@@ -37,7 +39,7 @@ def job_ctx() -> JobContext:
     )
 
 
-def test_register_jobs_registers_three_polling_jobs(job_ctx: JobContext) -> None:
+def test_register_jobs_registers_all_polling_jobs(job_ctx: JobContext) -> None:
     scheduler = AsyncIOScheduler()
     register_jobs(scheduler, job_ctx)
 

@@ -33,6 +33,7 @@ _CACHE_PATH = Path(__file__).parent.parent / "data" / "cafeteria_cache.json"
 
 # ── 캐시 헬퍼 ────────────────────────────────────────────────
 
+
 def _week_key() -> str:
     iso = date.today().isocalendar()
     return f"{iso.year}-W{iso.week:02d}"
@@ -49,7 +50,9 @@ def _load_cache() -> dict | None:
 
 def _save_cache(data: dict) -> None:
     _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _CACHE_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def clear_cache() -> None:
@@ -58,6 +61,7 @@ def clear_cache() -> None:
 
 
 # ── 공개 API ─────────────────────────────────────────────────
+
 
 async def fetch_today_menu() -> dict:
     """오늘 요일에 해당하는 학식 메뉴를 반환한다. 주간 캐시가 있으면 크롤링을 건너뛴다."""
@@ -88,10 +92,13 @@ async def fetch_today_menu() -> dict:
         days[day.isoformat()] = _make_result(day, _WEEKDAY_KO[i], flat, None, corners)
 
     _save_cache({"week": _week_key(), "days": days})
-    return days.get(today.isoformat(), _make_result(today, wd_str, [], "오늘 데이터가 없습니다."))
+    return days.get(
+        today.isoformat(), _make_result(today, wd_str, [], "오늘 데이터가 없습니다.")
+    )
 
 
 # ── 크롤러 ───────────────────────────────────────────────────
+
 
 async def _scrape_week() -> dict[int, list[dict]]:
     async with async_playwright() as pw:
@@ -126,11 +133,11 @@ async def _scrape_week() -> dict[int, list[dict]]:
                 continue
 
             corner_raw = (await cells[0].inner_text()).strip()
-            meal_time  = (await cells[2].inner_text()).strip() if len(cells) > 2 else ""
+            meal_time = (await cells[2].inner_text()).strip() if len(cells) > 2 else ""
 
             m = re.match(r"^(.+?)\((.+?)\)$", corner_raw)
             corner_name = m.group(1).strip() if m else corner_raw
-            sell_time   = m.group(2).strip() if m else ""
+            sell_time = m.group(2).strip() if m else ""
 
             for wd_idx, col_idx in col_indices.items():
                 if col_idx >= len(cells):
@@ -138,22 +145,27 @@ async def _scrape_week() -> dict[int, list[dict]]:
                 menu_html = await cells[col_idx].inner_html()
                 menus = [
                     unescape(item.strip())
-                    for item in re.sub(r"<br\s*/?>", "\n", menu_html, flags=re.IGNORECASE).splitlines()
+                    for item in re.sub(
+                        r"<br\s*/?>", "\n", menu_html, flags=re.IGNORECASE
+                    ).splitlines()
                     if item.strip() and item.strip() not in ("-", "—", "휴무")
                 ]
                 if menus:
-                    week_corners[wd_idx].append({
-                        "name":  corner_name,
-                        "time":  sell_time,
-                        "meal":  meal_time,
-                        "menus": menus,
-                    })
+                    week_corners[wd_idx].append(
+                        {
+                            "name": corner_name,
+                            "time": sell_time,
+                            "meal": meal_time,
+                            "menus": menus,
+                        }
+                    )
 
         await browser.close()
         return week_corners
 
 
 # ── 결과 빌더 ────────────────────────────────────────────────
+
 
 def _make_result(
     today: date,
@@ -163,10 +175,10 @@ def _make_result(
     corners: list[dict] | None = None,
 ) -> dict:
     return {
-        "date":      today.isoformat(),
-        "weekday":   wd_str,
+        "date": today.isoformat(),
+        "weekday": wd_str,
         "cafeteria": "건국대 학생식당",
-        "corners":   corners or [],
-        "menus":     menus,
-        "error":     error,
+        "corners": corners or [],
+        "menus": menus,
+        "error": error,
     }

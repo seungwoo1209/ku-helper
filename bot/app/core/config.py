@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     # §B(교통 알림)에서 필수화. 현재는 None 허용.
     subway_api_key: SecretStr | None = None
 
+    # §C(점심 알림) — Naver Local Search API 키. RestaurantsClient 가 사용.
+    # 미설정 시 RestaurantsClient 가 즉시 RestaurantsCrawlerFailed 를 던진다.
+    naver_search_client_id: str | None = None
+    naver_search_client_secret: SecretStr | None = None
+
+    # 건국대 학식 페이지 URL. LunchClient 가 Playwright 로 크롤링.
+    cafeteria_url: str = "https://www.konkuk.ac.kr/general/18211/subview.do"
+
 
 @lru_cache
 def get_settings() -> Settings:

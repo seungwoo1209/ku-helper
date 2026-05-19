@@ -48,14 +48,17 @@ class NotificationHistoryRepository:
         status: NotificationDeliveryStatus,
         payload: dict[str, Any],
         failure_reason: str | None = None,
+        immediate_send_request_id: int | None = None,
     ) -> None:
         """발송 결과 1행을 INSERT + flush한다.
 
         commit 은 호출자(Sender 워커) 책임.
-        notification_id 가 None 인 경우는 관리자 알림(F-22) 등 알림 행이 없는 케이스.
+        notification_id 와 immediate_send_request_id 둘 다 None 가능: 관리자 알림(F-22).
+        둘 중 하나만 set 되는 것이 일반적 (정기 알림 vs 즉시 발송).
         """
         row = NotificationHistory(
             notification_id=notification_id,
+            immediate_send_request_id=immediate_send_request_id,
             user_id=user_id,
             status=status,
             payload=payload,

@@ -4,6 +4,7 @@ import discord
 import httpx
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from playwright.async_api import async_playwright
 from redis.asyncio import Redis
 from sqlalchemy import text
 
@@ -12,6 +13,9 @@ from app.core.database import async_session_maker, engine
 from app.core.discord import DiscordBotClient
 from app.core.logging import configure_logging
 from app.core.redis import create_redis_client
+from app.crawlers.lunch.client import LunchClient
+from app.crawlers.restaurants.client import RestaurantsClient
+from app.crawlers.restaurants.exceptions import RestaurantsCrawlerFailed
 from app.notifications.sender import SendDmTask, run_sender_worker
 from app.scheduler.context import JobContext
 from app.scheduler.jobs import register_jobs
@@ -45,8 +49,27 @@ async def main() -> None:
     # httpx.AsyncClient: 공공 API 호출용. lifespan 에서 1회 생성·종료.
     http_client = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS)
 
+    # Playwright: 학식 크롤러 LunchClient 가 사용. 단일 chromium Browser 를 lifespan 동안
+    # 재사용하고, 매 호출 새 BrowserContext+Page 만 생성·종료한다.
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.launch(headless=True)
+    logger.info("playwright_ready")
+
+    lunch_client = LunchClient(browser, settings.cafeteria_url)
+    try:
+        restaurants_client: RestaurantsClient | None = RestaurantsClient(
+            http_client,
+            settings.naver_search_client_id,
+            settings.naver_search_client_secret,
+        )
+        logger.info("restaurants_client_ready")
+    except RestaurantsCrawlerFailed as exc:
+        restaurants_client = None
+        logger.warning("restaurants_client_skipped", reason=exc.reason)
+
     # in_flight set: Worker 가 큐 적재 후 Sender 처리 완료 전까지 중복 적재 방지.
     in_flight_notification_ids: set[int] = set()
+    lunch_inflight: set[int] = set()
 
     scheduler = AsyncIOScheduler()
 
@@ -64,6 +87,9 @@ async def main() -> None:
         session_maker=async_session_maker,
         settings=settings,
         in_flight_notification_ids=in_flight_notification_ids,
+        lunch_client=lunch_client,
+        restaurants_client=restaurants_client,
+        lunch_inflight=lunch_inflight,
     )
 
     register_jobs(scheduler, ctx)
@@ -76,6 +102,7 @@ async def main() -> None:
             dc_bot_client,
             async_session_maker,
             in_flight_notification_ids=in_flight_notification_ids,
+            lunch_inflight=lunch_inflight,
         )
     )
 
@@ -88,6 +115,8 @@ async def main() -> None:
         await asyncio.gather(sender_task, return_exceptions=True)
         scheduler.shutdown(wait=False)
         await dc_bot_client.close()
+        await browser.close()
+        await playwright.stop()
         await http_client.aclose()
         if redis_client is not None:
             await redis_client.aclose()

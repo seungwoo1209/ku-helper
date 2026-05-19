@@ -25,17 +25,26 @@ from urllib.parse import quote
 import httpx
 
 NAVER_LOCAL_URL = "https://openapi.naver.com/v1/search/local.json"
-_PAGE_SIZE  = 5
+_PAGE_SIZE = 5
 _CACHE_PATH = Path(__file__).parent.parent / "data" / "restaurants_cache.json"
 
 # 단일 "건대 맛집" 쿼리는 5~7곳만 반환 → 카테고리별로 분산해 풀 확보
 _QUERIES = [
-    "건대 한식", "건대 일식", "건대 중식", "건대 양식", "건대 분식",
-    "건대 고기", "건대 라멘", "건대 초밥", "건대 돈까스", "건대 해산물",
+    "건대 한식",
+    "건대 일식",
+    "건대 중식",
+    "건대 양식",
+    "건대 분식",
+    "건대 고기",
+    "건대 라멘",
+    "건대 초밥",
+    "건대 돈까스",
+    "건대 해산물",
 ]
 
 
 # ── 캐시 헬퍼 ────────────────────────────────────────────────
+
 
 def _today_key() -> str:
     return date.today().isoformat()
@@ -52,10 +61,13 @@ def _load_cache() -> dict | None:
 
 def _save_cache(data: dict) -> None:
     _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _CACHE_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 # ── 공개 API ─────────────────────────────────────────────────
+
 
 async def fetch_restaurant_pool() -> list[dict]:
     """오늘 날짜의 캐시가 있으면 반환, 없으면 Naver API로 새로 가져온다."""
@@ -80,8 +92,9 @@ def clear_cache() -> None:
 
 # ── Naver API 호출 ────────────────────────────────────────────
 
+
 async def _fetch_from_naver() -> list[dict]:
-    client_id     = getenv("NAVER_CLIENT_ID", "")
+    client_id = getenv("NAVER_CLIENT_ID", "")
     client_secret = getenv("NAVER_CLIENT_SECRET", "")
 
     if not client_id or not client_secret:
@@ -90,7 +103,7 @@ async def _fetch_from_naver() -> list[dict]:
         )
 
     headers = {
-        "X-Naver-Client-Id":     client_id,
+        "X-Naver-Client-Id": client_id,
         "X-Naver-Client-Secret": client_secret,
     }
 
@@ -102,7 +115,12 @@ async def _fetch_from_naver() -> list[dict]:
             resp = await client.get(
                 NAVER_LOCAL_URL,
                 headers=headers,
-                params={"query": query, "display": _PAGE_SIZE, "start": 1, "sort": "random"},
+                params={
+                    "query": query,
+                    "display": _PAGE_SIZE,
+                    "start": 1,
+                    "sort": "random",
+                },
             )
             resp.raise_for_status()
 
@@ -136,8 +154,8 @@ def _shorten_category(cat: str) -> str:
 def _normalize(item: dict) -> dict:
     name = _clean(item.get("title", ""))
     return {
-        "name":     name,
+        "name": name,
         "category": _shorten_category(item.get("category", "")),
-        "address":  _shorten_address(item.get("roadAddress") or item.get("address", "")),
-        "link":     f"https://map.naver.com/p/search/{quote(name)}",
+        "address": _shorten_address(item.get("roadAddress") or item.get("address", "")),
+        "link": f"https://map.naver.com/p/search/{quote(name)}",
     }

@@ -31,6 +31,7 @@ class _InsertCall:
     status: NotificationDeliveryStatus
     payload: dict[str, Any]
     failure_reason: str | None
+    immediate_send_request_id: int | None = None
 
 
 class _FakeHistoryRepo:
@@ -45,6 +46,7 @@ class _FakeHistoryRepo:
         status: NotificationDeliveryStatus,
         payload: dict[str, Any],
         failure_reason: str | None = None,
+        immediate_send_request_id: int | None = None,
     ) -> None:
         self.calls.append(
             _InsertCall(
@@ -53,6 +55,7 @@ class _FakeHistoryRepo:
                 status=status,
                 payload=payload,
                 failure_reason=failure_reason,
+                immediate_send_request_id=immediate_send_request_id,
             )
         )
 

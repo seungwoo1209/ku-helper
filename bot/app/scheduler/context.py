@@ -2,12 +2,17 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.notifications.sender import SendDmTask
+
+if TYPE_CHECKING:
+    from app.crawlers.lunch.client import LunchClient
+    from app.crawlers.restaurants.client import RestaurantsClient
 
 
 @dataclass
@@ -23,3 +28,8 @@ class JobContext:
     session_maker: async_sessionmaker[AsyncSession]
     settings: Settings
     in_flight_notification_ids: set[int] = field(default_factory=set)
+    # §C-3 즉시 발송 lunch worker 가 사용. lifespan 에서 lunch_client·restaurants_client 가
+    # 만들어지지 못한 경우(키 미설정 등) None 이며 worker 는 skip.
+    lunch_client: "LunchClient | None" = None
+    restaurants_client: "RestaurantsClient | None" = None
+    lunch_inflight: set[int] = field(default_factory=set)
