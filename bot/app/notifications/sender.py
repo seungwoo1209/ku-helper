@@ -3,7 +3,8 @@
 asyncio.Queue[SendDmTask] 1개 + 워커 코루틴 1개.
 Discord API rate limit 준수를 위해 워커는 단일 인스턴스만 유지한다 (architecture.md Sender 절).
 
-§A-3 지수 백오프 재시도는 다음 PR. 본 PR 에서는 발송 실패 시 FAILED 1행 INSERT 후 종료.
+§A-3 지수 백오프 재시도: discord.DiscordException 발생 시 최대 3회(백오프 1·2·4초) 재시도.
+INSERT 는 마지막에 단 1회. 429 Retry-After 백오프는 DiscordBotClient 책임이므로 Sender 는 무관.
 """
 
 import asyncio
@@ -20,6 +21,11 @@ from app.notifications.history_repository import NotificationHistoryRepository
 from app.notifications.repository import NotificationRepository
 
 _logger = structlog.get_logger(__name__)
+
+# 지수 백오프 대기 시간(초). 마지막 시도 후에는 sleep 없음 (len = 최대시도 - 1).
+RETRY_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0)
+# 최대 시도 횟수 = len(RETRY_BACKOFF_SECONDS) + 1
+_MAX_ATTEMPTS: int = len(RETRY_BACKOFF_SECONDS) + 1
 
 
 @dataclass(frozen=True)
@@ -109,50 +115,71 @@ async def _process_task(
             await session.commit()
             return
 
-        try:
-            await discord_client.send_embed(task.discord_id, task.embed)
-        except discord.DiscordException as exc:
-            _logger.warning(
-                "sender_discord_error",
-                user_id=task.user_id,
-                discord_id=task.discord_id,
-                error=str(exc)[:200],
-            )
-            await history_repo.insert_result(
-                notification_id=task.notification_id,
-                user_id=task.user_id,
-                status=NotificationDeliveryStatus.FAILED,
-                payload=task.payload,
-                failure_reason=str(exc)[:200],
-            )
-            await session.commit()
-            return
-        except Exception:
-            _logger.exception(
-                "sender_worker_unexpected",
-                user_id=task.user_id,
-                discord_id=task.discord_id,
-            )
-            await history_repo.insert_result(
-                notification_id=task.notification_id,
-                user_id=task.user_id,
-                status=NotificationDeliveryStatus.FAILED,
-                payload=task.payload,
-                failure_reason="unexpected_error",
-            )
-            await session.commit()
-            return
+        last_exc: discord.DiscordException | None = None
+        succeeded = False
 
-        await history_repo.insert_result(
-            notification_id=task.notification_id,
-            user_id=task.user_id,
-            status=NotificationDeliveryStatus.SUCCESS,
-            payload=task.payload,
-        )
-        await session.commit()
-        _logger.info(
-            "dm_sent",
-            user_id=task.user_id,
-            discord_id=task.discord_id,
-            notification_id=task.notification_id,
-        )
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                await discord_client.send_embed(task.discord_id, task.embed)
+                succeeded = True
+                break
+            except discord.DiscordException as exc:
+                last_exc = exc
+                _logger.warning(
+                    "dm_send_retry",
+                    user_id=task.user_id,
+                    notification_id=task.notification_id,
+                    attempt=attempt,
+                    reason=str(exc)[:200],
+                )
+                # 마지막 시도가 아니면 백오프 후 재시도.
+                if attempt < _MAX_ATTEMPTS:
+                    await asyncio.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
+            except Exception:
+                _logger.exception(
+                    "sender_worker_unexpected",
+                    user_id=task.user_id,
+                    discord_id=task.discord_id,
+                )
+                await history_repo.insert_result(
+                    notification_id=task.notification_id,
+                    user_id=task.user_id,
+                    status=NotificationDeliveryStatus.FAILED,
+                    payload=task.payload,
+                    failure_reason="unexpected_error",
+                )
+                await session.commit()
+                return
+
+        if succeeded:
+            await history_repo.insert_result(
+                notification_id=task.notification_id,
+                user_id=task.user_id,
+                status=NotificationDeliveryStatus.SUCCESS,
+                payload=task.payload,
+            )
+            await session.commit()
+            _logger.info(
+                "dm_sent",
+                user_id=task.user_id,
+                discord_id=task.discord_id,
+                notification_id=task.notification_id,
+            )
+        else:
+            # 모든 시도 실패 — last_exc 가 반드시 존재 (succeeded=False 이면 최소 1회 except).
+            failure_reason = str(last_exc)[:200] if last_exc is not None else "unknown"
+            _logger.warning(
+                "dm_failed",
+                user_id=task.user_id,
+                discord_id=task.discord_id,
+                notification_id=task.notification_id,
+                reason=failure_reason,
+            )
+            await history_repo.insert_result(
+                notification_id=task.notification_id,
+                user_id=task.user_id,
+                status=NotificationDeliveryStatus.FAILED,
+                payload=task.payload,
+                failure_reason=failure_reason,
+            )
+            await session.commit()

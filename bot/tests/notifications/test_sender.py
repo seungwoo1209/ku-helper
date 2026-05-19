@@ -364,3 +364,97 @@ async def test_history_repository_insert_result_with_failure_reason() -> None:
     assert row.notification_id is None
     assert row.failure_reason == "user_deleted"
     assert row.status == NotificationDeliveryStatus.FAILED
+
+
+# ---------------------------------------------------------------------------
+# §A-3 회귀 가드: 지수 백오프 재시도
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_three_failures_insert_failed_history_once(
+    discord_client: Any,
+    dc_channel: AsyncMock,
+) -> None:
+    """3회 모두 discord.HTTPException → FAILED history 1 row, send 호출 3회."""
+    dc_channel.send.side_effect = discord.HTTPException(
+        MagicMock(status=500), "server error"
+    )
+    task = _make_task()
+
+    with patch("app.notifications.sender.asyncio.sleep", new_callable=AsyncMock):
+        history_repo, _ = await _run_worker_with_task(
+            task, discord_client, UserStatus.ACTIVE
+        )
+
+    # history INSERT 정확히 1회
+    assert len(history_repo.calls) == 1
+    call = history_repo.calls[0]
+    assert call.status == NotificationDeliveryStatus.FAILED
+    assert call.failure_reason is not None
+    assert "server error" in call.failure_reason
+
+    # send 3회 호출
+    assert dc_channel.send.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_two_failures_then_success_inserts_success_history_once(
+    discord_client: Any,
+    dc_channel: AsyncMock,
+) -> None:
+    """2회 실패 후 3번째 성공 → SUCCESS history 1 row, send 3회 호출."""
+    exc = discord.HTTPException(MagicMock(status=500), "temporary error")
+    dc_channel.send.side_effect = [exc, exc, None]
+    task = _make_task()
+
+    with patch("app.notifications.sender.asyncio.sleep", new_callable=AsyncMock):
+        history_repo, _ = await _run_worker_with_task(
+            task, discord_client, UserStatus.ACTIVE
+        )
+
+    assert len(history_repo.calls) == 1
+    assert history_repo.calls[0].status == NotificationDeliveryStatus.SUCCESS
+    assert dc_channel.send.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_first_attempt_success_no_sleep(
+    discord_client: Any,
+    dc_channel: AsyncMock,
+) -> None:
+    """1회 성공 시 sleep 호출 0회, SUCCESS history 1 row."""
+    task = _make_task()
+
+    with patch(
+        "app.notifications.sender.asyncio.sleep", new_callable=AsyncMock
+    ) as mock_sleep:
+        history_repo, _ = await _run_worker_with_task(
+            task, discord_client, UserStatus.ACTIVE
+        )
+
+    mock_sleep.assert_not_awaited()
+    assert len(history_repo.calls) == 1
+    assert history_repo.calls[0].status == NotificationDeliveryStatus.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_backoff_sleep_arguments(
+    discord_client: Any,
+    dc_channel: AsyncMock,
+) -> None:
+    """백오프 sleep 인자 검증: 첫 sleep 1.0초, 두 번째 sleep 2.0초."""
+    exc = discord.HTTPException(MagicMock(status=500), "fail")
+    # 3회 모두 실패시켜 sleep 2회(1.0, 2.0)가 호출되게 한다.
+    dc_channel.send.side_effect = exc
+
+    task = _make_task()
+    sleep_calls: list[float] = []
+
+    async def _capture_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    with patch("app.notifications.sender.asyncio.sleep", side_effect=_capture_sleep):
+        await _run_worker_with_task(task, discord_client, UserStatus.ACTIVE)
+
+    assert sleep_calls == [1.0, 2.0]

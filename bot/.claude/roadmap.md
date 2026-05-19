@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-19 (F-07 교통 정기 알림 종단 + worker 버그 2건 수정 완료, 실 DM 1건 발송 검증 완료. 다음은 §A-3 또는 F-06).
+마지막 갱신: 2026-05-19 (§A-3 F-21 발송 실패 재시도 완료. 다음은 §B(F-06) 또는 §0-1 잔여).
 
 ## 진행 상황 스냅샷
 
@@ -16,7 +16,8 @@
 - 서울 지하철 API 참고 문서 (커밋 `bb35e19`): `bot/docs/seoul_subway_realtime_arrival_api.md`. SubwayClient 의 필드 매핑·에러 코드·`subwayId` 호선 코드 1차 소스.
 - worker 버그 2건 수정 (커밋 `18668ce`): (1) `cfg.get("interval_minutes")` → `repeat_interval_minutes` 키 교정 — 기존엔 interval 가드가 비활성화돼 매 틱 재발송 위험. (2) UTC 문자열 사전식 비교 → KST `datetime.time` 객체 비교 (`zoneinfo.ZoneInfo("Asia/Seoul")` + `_parse_config_time` helper). 회귀 가드 2건 추가.
 - 실 DM 1건 발송 검증 (2026-05-19 18:24 KST): user_id=1 (`dogbugbaby`) 강남역 2호선 F-07 구독 → `transit_queued` → `dm_sent` → `notification_history` SUCCESS row 1건. 임베드 4 필드(내선/외선 각 2건).
-- 테스트: **33 passing** (이전 12 + F-07 19 + 버그 회귀 가드 2). 카테고리: `tests/scheduler/test_jobs.py`, `tests/core/test_discord.py`, `tests/notifications/test_sender.py`, `tests/crawlers/subway/test_client.py`, `tests/notifications/transit/test_worker.py`, `tests/notifications/transit/test_embeds.py`.
+- §A-3 발송 실패 재시도 (F-21) 완료 (커밋 미정): `RETRY_BACKOFF_SECONDS=(1.0, 2.0)` + `_MAX_ATTEMPTS=3`. `_process_task` 에 retry 루프 추가. INSERT 마지막 1회만. `dm_send_retry`/`dm_failed`/`dm_sent` 로그 키 유지. 회귀 가드 4건 추가.
+- 테스트: **37 passing** (이전 33 + §A-3 회귀 가드 4). 카테고리: `tests/scheduler/test_jobs.py`, `tests/core/test_discord.py`, `tests/notifications/test_sender.py`, `tests/crawlers/subway/test_client.py`, `tests/notifications/transit/test_worker.py`, `tests/notifications/transit/test_embeds.py`.
 
 인터페이스 합의 대기 (백엔드 결정 필요):
 - `notification_history.payload` JSONB 스키마 — backend roadmap §E-1. 현재는 임시 dict 로 INSERT 중.
@@ -64,10 +65,10 @@
 - 이중 가드: 큐에서 꺼낸 시점에 `get_user_status` 재검증. DELETED 또는 사용자 행 없음이면 FAILED + `user_deleted`.
 - Worker → 큐 적재는 §B 부터 — 본 시점에는 큐가 비어 있고 워커 task 만 살아 있다.
 
-### A-3. 발송 실패 재시도 (F-21, 우선순위: 상) — **다음 PR**
-- 지수 백오프 1·2·4초, 최대 3회. 모든 시도 실패 시 history에 `FAILED` + `failure_reason`.
-- 회귀 가드 테스트: 모킹한 discord 호출이 3회 실패 → history 1 row(FAILED) + 큐 비움.
-- 구현 위치: `_process_task` 의 `discord.DiscordException` catch 자리에 retry 루프. INSERT 는 마지막 한 번만 (시도마다 INSERT 하지 않음).
+### A-3. 발송 실패 재시도 (F-21, 우선순위: 상) — 완료 (커밋 미정)
+- 지수 백오프 1·2·4초(`RETRY_BACKOFF_SECONDS=(1.0, 2.0)`, `_MAX_ATTEMPTS=3`), 최대 3회. 모든 시도 실패 시 history에 `FAILED` + `failure_reason`.
+- 회귀 가드 테스트 4건: (1) 3회 실패 → FAILED 1 row + send 3회, (2) 2회 실패 후 성공 → SUCCESS 1 row + send 3회, (3) 1회 성공 → sleep 0회, (4) 백오프 sleep 인자 1.0·2.0 검증.
+- 구현 위치: `_process_task` 의 `discord.DiscordException` catch 자리에 retry 루프. INSERT 는 마지막 한 번만.
 
 ## §B. 첫 알림 흐름 — 교통 (가장 단순한 단일 경로)
 
