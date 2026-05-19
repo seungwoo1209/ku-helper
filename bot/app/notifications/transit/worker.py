@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
-from app.crawlers.subway.client import SubwayClient
+from app.crawlers.subway.client import SubwayArrival, SubwayClient
 from app.crawlers.subway.exceptions import SubwayApiUnavailable
 from app.core.exceptions import BotException
 from app.db.models import NotificationDeliveryStatus, NotificationType
@@ -144,10 +144,6 @@ async def run_transit_job(ctx: JobContext) -> None:
                     continue
 
             raw_arrivals = arrivals_cache[station_name]
-            from app.crawlers.subway.client import (
-                SubwayArrival,
-            )  # local import for type narrowing
-
             arrivals = raw_arrivals if isinstance(raw_arrivals, list) else []
             typed_arrivals: list[SubwayArrival] = [
                 a for a in arrivals if isinstance(a, SubwayArrival)

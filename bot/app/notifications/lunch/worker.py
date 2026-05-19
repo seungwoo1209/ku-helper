@@ -63,7 +63,16 @@ async def run_immediate_send_lunch_job(ctx: JobContext) -> None:
                     restaurants_client.fetch_pool(),
                 )
             except (LunchCrawlerFailed, RestaurantsCrawlerFailed) as exc:
-                # 발송 실패도 history 에 1건 적재해 다음 폴링에서 자연 제외.
+                # ARCHITECTURE EXCEPTION: 워커가 직접 notification_history 에 INSERT.
+                # bot/CLAUDE.md rule 5 + architecture.md Worker 절은 "Sender 만 INSERT"
+                # 를 명시하지만, 크롤러가 실패해 embed/payload 를 만들지 못하는 경우
+                # Sender 큐에 넣을 task 자체가 없다. 그래도 history row 가 없으면
+                # ImmediateSendRequestRepository.list_pending 의 LEFT JOIN 가드가
+                # 풀리지 않아 같은 row 가 매 5초 틱마다 재시도된다. 직접 INSERT 외에
+                # 깔끔한 해결책이 없어 이 한 분기에서만 규칙을 우회.
+                # 정식 정리는 bot/.claude/roadmap.md 알려진 부채에 명시 —
+                # SendDmTask 에 "이미 실패" 플래그를 두고 Sender 가 INSERT 만 수행하는
+                # 패턴으로 통합 예정.
                 reason = getattr(exc, "reason", str(exc))
                 _logger.warning(
                     "immediate_send_lunch_fetch_failed",
