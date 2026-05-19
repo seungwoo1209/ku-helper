@@ -11,6 +11,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import AppException
 from app.core.logging import configure_logging
+from routes.lunch import router as lunch_router
 
 configure_logging()
 logger = structlog.get_logger(__name__)
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(api_router)
+    app.include_router(lunch_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
