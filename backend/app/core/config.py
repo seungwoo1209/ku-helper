@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     # 사용자 설치 흐름으로 통일하므로 기본값은 1.
     discord_integration_type: int = 1
 
+    frontend_url: str = "http://localhost:5173"
+
 
 @lru_cache
 def get_settings() -> Settings:

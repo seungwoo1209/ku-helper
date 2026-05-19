@@ -1,7 +1,9 @@
 .env
 __pycache__/
+*.pyc
 *.py[cod]
 .venv/
+data/*.json
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/

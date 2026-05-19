@@ -3,8 +3,8 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from fastapi.responses import RedirectResponse
 
+from app.core.config import Settings, get_settings
 from app.domains.auth.dependencies import get_auth_service
-from app.domains.auth.schemas import TokenRead
 from app.domains.auth.service import AuthService
 
 router = APIRouter(prefix="/auth/discord", tags=["auth"])
@@ -25,16 +25,22 @@ async def login(
     )
 
 
-@router.get("/callback", response_model=TokenRead, status_code=200)
+@router.get("/callback", response_class=RedirectResponse, status_code=307)
 async def callback(
     code: Annotated[str, Query(...)],
     state: Annotated[str, Query(...)],
     background_tasks: BackgroundTasks,
     service: Annotated[AuthService, Depends(get_auth_service)],
-) -> TokenRead:
-    """Discord OAuth 콜백을 처리하고 자체 JWT를 발급한다."""
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RedirectResponse:
+    """Discord OAuth 콜백을 처리하고 프론트엔드로 토큰과 함께 리다이렉트한다."""
     result = await service.handle_callback(code, state)
     background_tasks.add_task(
         service.maybe_send_welcome_dm, result.discord_id, result.is_new_user
     )
-    return result.token
+    redirect_url = (
+        f"{settings.frontend_url}/"
+        f"?access_token={result.token.access_token}"
+        f"&refresh_token={result.token.refresh_token}"
+    )
+    return RedirectResponse(url=redirect_url, status_code=307)
