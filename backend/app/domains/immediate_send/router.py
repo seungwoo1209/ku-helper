@@ -11,7 +11,27 @@ from app.domains.users.models import User
 router = APIRouter(prefix="/me/immediate-send", tags=["immediate-send"])
 
 
-@router.post("/lunch", response_model=LunchDispatchResponse, status_code=202)
+@router.post(
+    "/lunch",
+    response_model=LunchDispatchResponse,
+    status_code=202,
+    summary="즉시 점심 DM 발송 요청",
+    description=(
+        "현재 사용자에게 즉시 점심 DM 을 보내달라는 요청을 큐 테이블 "
+        "(`immediate_send_requests`) 에 INSERT 하고 202 로 즉시 반환한다.\n\n"
+        "**처리 흐름**: 봇 컨테이너가 5초 간격으로 큐를 폴링 → pending 행을 픽업 → "
+        "학식·맛집 데이터 크롤 → Discord DM 발송 → 큐 상태 업데이트.\n\n"
+        "**쿨다운**: 동일 사용자의 미처리 요청이 큐에 남아 있으면 429 "
+        "`IMMEDIATE_SEND_RATE_LIMITED` 로 거절된다. 이후 상태 조회 엔드포인트는 후속."
+    ),
+    response_description="큐 적재 결과 (request_id, requested_at)",
+    responses={
+        401: {"description": "JWT 누락·만료·서명오류 또는 USER_DELETED"},
+        429: {
+            "description": "동일 사용자의 처리 대기 요청이 이미 큐에 존재 (IMMEDIATE_SEND_RATE_LIMITED)",
+        },
+    },
+)
 async def dispatch_lunch_now(
     current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[ImmediateSendService, Depends(get_immediate_send_service)],
