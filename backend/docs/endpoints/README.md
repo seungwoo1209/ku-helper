@@ -1,6 +1,6 @@
-# docs/endpoints
+# backend/docs/endpoints
 
-FastAPI 라우터 데코레이터의 `description=` 인자로 **인라인되는** 마크다운 본문 저장소.
+FastAPI 라우터 데코레이터의 `description=` 인자로 **인라인되는** 마크다운 본문 저장소. backend 컨테이너 내부에서 라우터 모듈이 `read_text()` 로 직접 읽기 때문에 backend 디렉터리 안에 둔다.
 
 ## 언제 여기에 파일을 만드나
 
@@ -19,7 +19,7 @@ FastAPI 라우터 데코레이터의 `description=` 인자로 **인라인되는*
 
 ```
 backend/app/domains/auth/router.py  →  async def callback(...)
-docs/endpoints/callback.md
+backend/docs/endpoints/callback.md
 ```
 
 ## 작성 규칙
@@ -31,12 +31,12 @@ docs/endpoints/callback.md
 
 ## 라우터와 연결
 
-라우터 모듈 상단에 `_DOCS_DIR` 상수를 1회 정의하고, `description=` 에 `read_text()` 결과를 넣는다. 경로는 `backend/app/domains/<name>/router.py` 기준 `parents[4]`.
+라우터 모듈 상단에 `_DOCS_DIR` 상수를 1회 정의하고, `description=` 에 `read_text()` 결과를 넣는다. 경로는 `backend/app/domains/<name>/router.py` 기준 `parents[3]` (= `backend/` 디렉터리).
 
 ```python
 from pathlib import Path
 
-_DOCS_DIR = Path(__file__).resolve().parents[4] / "docs" / "endpoints"
+_DOCS_DIR = Path(__file__).resolve().parents[3] / "docs" / "endpoints"
 
 
 @router.get(

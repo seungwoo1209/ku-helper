@@ -8,8 +8,8 @@ from app.core.config import Settings, get_settings
 from app.domains.auth.dependencies import get_auth_service
 from app.domains.auth.service import AuthService
 
-# backend/app/domains/auth/router.py 기준 4단계 위 = repo root → docs/endpoints
-_DOCS_DIR = Path(__file__).resolve().parents[4] / "docs" / "endpoints"
+# backend/app/domains/auth/router.py 기준 3단계 위 = backend/ → backend/docs/endpoints
+_DOCS_DIR = Path(__file__).resolve().parents[3] / "docs" / "endpoints"
 
 router = APIRouter(prefix="/auth/discord", tags=["auth"])
 

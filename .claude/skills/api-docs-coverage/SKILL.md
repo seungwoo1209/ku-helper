@@ -135,7 +135,7 @@ class _TransitArrival(BaseModel):
     )
 ```
 
-## docs/endpoints/<op_id>.md 분리 기준
+## backend/docs/endpoints/<op_id>.md 분리 기준
 
 description 이 다음 중 **하나라도** 해당하면 별도 마크다운 파일로 분리한다.
 
@@ -144,7 +144,7 @@ description 이 다음 중 **하나라도** 해당하면 별도 마크다운 파
 - 8줄 이상 본문.
 - 코드 블록 2개 이상.
 
-파일 위치: `docs/endpoints/<router_function_name>.md`. 라우터 함수명이 FastAPI 의 default operation_id 와 동일하므로 같은 이름을 쓴다.
+파일 위치: `backend/docs/endpoints/<router_function_name>.md`. 라우터 함수명이 FastAPI 의 default operation_id 와 동일하므로 같은 이름을 쓴다.
 
 ### 연결 패턴
 
@@ -153,8 +153,8 @@ description 이 다음 중 **하나라도** 해당하면 별도 마크다운 파
 ```python
 from pathlib import Path
 
-# backend/app/domains/<name>/router.py 기준 → docs/endpoints
-_DOCS_DIR = Path(__file__).resolve().parents[4] / "docs" / "endpoints"
+# backend/app/domains/<name>/router.py 기준 → backend/docs/endpoints
+_DOCS_DIR = Path(__file__).resolve().parents[3] / "docs" / "endpoints"
 
 
 @router.get(
@@ -168,7 +168,7 @@ async def callback(...) -> TokenRead:
     ...
 ```
 
-`parents[4]` 계산: `backend/app/domains/<name>/router.py` → `backend/` 까지 4단계 → `..` 한 번 더 = repo root. 라우터 파일에서 이 줄을 처음 추가할 때는 실제 경로를 한 번 확인한다.
+`parents[3]` 계산: `backend/app/domains/<name>/router.py` → `..` 세 번 = `backend/` 디렉터리. 그 아래 `docs/endpoints` 가 분리 본문 저장소. 라우터 파일에서 이 줄을 처음 추가할 때는 실제 경로를 한 번 확인한다.
 
 분리한 .md 파일 작성 시:
 - **H1 금지**. ReDoc 이 operation summary 를 자체 헤더로 렌더한다. 본문은 H2 부터.
@@ -192,7 +192,7 @@ async def callback(...) -> TokenRead:
 2. 변경된 파일을 Read 로 전체 확인한다.
 3. **router 의 경우**: 변경된 함수마다 Router 체크리스트 5 항목을 통과하는지 검토. 누락만 채운다.
 4. **schema 의 경우**: 변경된 클래스마다 Schema 체크리스트 5 항목을 통과하는지 검토. 누락만 채운다.
-5. description 이 분리 기준을 충족 → `docs/endpoints/<op_id>.md` 작성 + `read_text()` 인라인 전환. 작성한 .md 는 H1 금지 규칙 준수.
+5. description 이 분리 기준을 충족 → `backend/docs/endpoints/<op_id>.md` 작성 + `read_text()` 인라인 전환. 작성한 .md 는 H1 금지 규칙 준수.
 6. 보강 완료 후 사용자에게 안내: "`cd backend && uv run python scripts/regenerate_openapi.py` 로 openapi.json 갱신 후 커밋하세요." (스킬이 직접 실행하지 않는다 — backend Settings 의 더미 env 가 사용자 .env 기반이라 환경 의존성이 있음.)
 7. 이번 PR 의 범위 밖에 있는 다른 도메인 (변경하지 않은 파일) 까지 손대지 않는다.
 
@@ -201,7 +201,7 @@ async def callback(...) -> TokenRead:
 보강을 마친 뒤 사용자에게 한 줄 요약 보낸다.
 
 ```
-📘 api-docs-coverage: router N개 / schema M개 보강. docs/endpoints/<op_id>.md K개 신설.
+📘 api-docs-coverage: router N개 / schema M개 보강. backend/docs/endpoints/<op_id>.md K개 신설.
 다음 단계: backend/scripts/regenerate_openapi.py 실행 후 커밋.
 ```
 
