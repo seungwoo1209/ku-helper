@@ -1,3 +1,5 @@
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -8,7 +10,7 @@ from app.domains.users.models import User
 
 
 @pytest.mark.asyncio
-async def test_callback_creates_user_and_returns_tokens(
+async def test_callback_creates_user_and_redirects_with_tokens(
     client: AsyncClient,
     db_session: AsyncSession,
     discord_oauth_mocks,
@@ -18,9 +20,12 @@ async def test_callback_creates_user_and_returns_tokens(
         "/api/v1/auth/discord/callback",
         params={"code": "fake-code", "state": state},
     )
-    assert response.status_code == 200
-    body = response.json()
-    assert "access_token" in body and "refresh_token" in body
+    assert response.status_code == 307
+    location = response.headers["location"]
+    query = parse_qs(urlparse(location).query)
+    assert "access_token" in query and "refresh_token" in query
+    assert query["access_token"][0]
+    assert query["refresh_token"][0]
 
     stored = (
         await db_session.execute(

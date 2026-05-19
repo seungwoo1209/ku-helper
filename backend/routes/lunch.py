@@ -19,7 +19,7 @@ _ROOT = Path(__file__).parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from bot.scrapers.cafeteria import fetch_today_menu       # noqa: E402
+from bot.scrapers.cafeteria import fetch_today_menu  # noqa: E402
 from bot.scrapers.restaurants import fetch_restaurant_pool  # noqa: E402
 
 router = APIRouter(prefix="/api/lunch", tags=["lunch"])
