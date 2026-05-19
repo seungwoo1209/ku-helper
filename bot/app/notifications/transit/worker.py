@@ -1,4 +1,4 @@
-"""TRANSIT 알림 워커 — F-07 정기 간격(recurring) 모드.
+"""TRANSIT 알림 워커 — F-07 정기 간격(recurring) 모드 + 즉시 발송 모드.
 
 Scheduler → Worker → (SubwayClient · Repository) → Sender 순서를 따른다.
 F-18 활성 시간대·Redis 캐시는 후속 PR 에서 추가한다.
@@ -10,14 +10,15 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
+from app.core.exceptions import BotException
 from app.crawlers.subway.client import SubwayArrival, SubwayClient
 from app.crawlers.subway.exceptions import SubwayApiUnavailable
-from app.core.exceptions import BotException
 from app.db.models import NotificationDeliveryStatus, NotificationType
 from app.notifications.history_repository import NotificationHistoryRepository
 from app.notifications.repository import NotificationRepository
 from app.notifications.sender import SendDmTask
 from app.notifications.transit.embeds import build_transit_recurring_embed
+from app.notifications.transit.repository import ImmediateSendTransitRepository
 from app.scheduler.context import JobContext
 
 _logger = structlog.get_logger(__name__)
@@ -173,3 +174,80 @@ async def run_transit_job(ctx: JobContext) -> None:
                 station_name=station_name,
                 line=line,
             )
+
+
+async def run_immediate_send_transit_job(ctx: JobContext) -> None:
+    """TRANSIT 즉시 발송 큐를 폴링하여 SubwayClient 결과를 Sender 에 적재.
+
+    아키텍처 예외: crawler 실패 시 워커가 직접 NotificationHistoryRepository.insert_result
+    (status=FAILED) 를 호출한다. 이유: embed/payload 가 없어 SendDmTask 를 만들 수 없으면
+    history row 없이 LEFT JOIN 가드가 풀리지 않아 매 5초 재시도되기 때문. lunch 워커와 동일.
+    정식 정리 후보: SendDmTask 에 "이미 실패" 플래그를 두고 Sender 가 INSERT 만 수행.
+    """
+    subway_client = SubwayClient(ctx.http_client, ctx.settings)
+    now = datetime.now(tz=timezone.utc)
+
+    try:
+        async with ctx.session_maker() as session:
+            repo = ImmediateSendTransitRepository(session)
+            history_repo = NotificationHistoryRepository(session)
+            rows = await repo.list_pending(limit=50)
+            _logger.info("immediate_send_transit_tick", count=len(rows))
+
+            for row in rows:
+                if row.id in ctx.immediate_send_inflight:
+                    _logger.debug(
+                        "immediate_send_transit_skip_in_flight", request_id=row.id
+                    )
+                    continue
+                ctx.immediate_send_inflight.add(row.id)
+
+                station_name = str(row.payload.get("station_name", ""))
+                line = str(row.payload.get("line", ""))
+
+                try:
+                    arrivals = await subway_client.fetch_arrivals(station_name)
+                except (SubwayApiUnavailable, BotException) as exc:
+                    _logger.warning(
+                        "immediate_send_transit_subway_unavailable",
+                        request_id=row.id,
+                        station_name=station_name,
+                        code=exc.code,
+                    )
+                    await history_repo.insert_result(
+                        notification_id=None,
+                        user_id=row.user_id,
+                        status=NotificationDeliveryStatus.FAILED,
+                        payload={"reason": "subway_api_unavailable", "code": exc.code},
+                        failure_reason=exc.code,
+                        immediate_send_request_id=row.id,
+                    )
+                    await session.commit()
+                    ctx.immediate_send_inflight.discard(row.id)
+                    continue
+
+                embed, payload = build_transit_recurring_embed(
+                    station_name=station_name,
+                    line=line,
+                    arrivals=arrivals,
+                    now=now,
+                )
+                await ctx.queue.put(
+                    SendDmTask(
+                        notification_id=None,
+                        user_id=row.user_id,
+                        discord_id=row.discord_id,
+                        embed=embed,
+                        payload=payload,
+                        immediate_send_request_id=row.id,
+                    )
+                )
+                _logger.info(
+                    "immediate_send_transit_queued",
+                    request_id=row.id,
+                    user_id=row.user_id,
+                    station_name=station_name,
+                    line=line,
+                )
+    except BotException as exc:
+        _logger.exception("immediate_send_transit_failed", code=exc.code)

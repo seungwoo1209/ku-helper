@@ -69,7 +69,7 @@ async def main() -> None:
 
     # in_flight set: Worker 가 큐 적재 후 Sender 처리 완료 전까지 중복 적재 방지.
     in_flight_notification_ids: set[int] = set()
-    lunch_inflight: set[int] = set()
+    immediate_send_inflight: set[int] = set()
 
     scheduler = AsyncIOScheduler()
 
@@ -89,7 +89,7 @@ async def main() -> None:
         in_flight_notification_ids=in_flight_notification_ids,
         lunch_client=lunch_client,
         restaurants_client=restaurants_client,
-        lunch_inflight=lunch_inflight,
+        immediate_send_inflight=immediate_send_inflight,
     )
 
     register_jobs(scheduler, ctx)
@@ -102,7 +102,7 @@ async def main() -> None:
             dc_bot_client,
             async_session_maker,
             in_flight_notification_ids=in_flight_notification_ids,
-            lunch_inflight=lunch_inflight,
+            immediate_send_inflight=immediate_send_inflight,
         )
     )
 

@@ -4,7 +4,7 @@
 현재 봇 컨테이너 작업이 우선이라 잠시 보류 중이지만, 백엔드 PR을 다시 시작할 때
 **여기서부터 읽어서 컨텍스트를 복구**할 것.
 
-마지막 갱신: 2026-05-20 (D-4 부채 폐기 — `backend/routes/lunch.py` 경로·`bot/scrapers/` 일괄 삭제. 프론트 LunchScreen 라이브 패널은 의도적으로 보존하지 않고 그대로 두어 `/api/lunch/today` 가 404 가 되는 회귀를 수용).
+마지막 갱신: 2026-05-20 (D-5 정식 승격 — `immediate_send_requests` 도메인이 정식 on-demand 알림 채널로 격상. `POST /api/v1/me/immediate-send/transit` 추가, lunch + transit 두 종 운영. roadmap §D-5 도 그에 맞춰 문구 갱신).
 
 ## 진행 상황 스냅샷
 
@@ -84,12 +84,18 @@
 - 워크플로: docker-compose.test.yml 기동 + `uv sync` + `uv run ruff check` + `uv run mypy app tests` + `uv run pytest --cov`.
 - 별 PR로 가벼움. 위 어느 작업에든 합쳐도 무방.
 
-### D-5. 폐기 예정 — `immediate_send_requests` 임시 구조
-- **위치**: `app/domains/immediate_send/` 도메인, `immediate_send_requests` 테이블, `notification_history.immediate_send_request_id` 컬럼, 알embic 0005.
-- **존재 사유**: "즉시 lunch DM" 종단 검증용. 프론트 버튼 → 백엔드 INSERT → 봇 폴링 → DM. 컨테이너 경계(PG 매개) 를 준수하면서 즉시성 확보.
-- **잠재 확장**: 도메인 `type` enum 이 TRANSIT/LUNCH/LIBRARY 모두 받게 설계됨. 현재 LUNCH 만 사용. 후속에 transit/library 도 같은 경로로 확장 가능.
-- **폐기 조건**: 정식 알림 시스템(스케줄 + on-demand 통합) 도입 시 도메인·테이블·컬럼·라우터 일괄 제거. 그때까지 추가 기능은 이 도메인에 넣지 말고 정식 알림 시스템으로 가는 게 원칙.
-- **연결 부채**: 봇 측 `bot/app/notifications/lunch/` 워커도 같은 라이프사이클. 함께 폐기.
+### D-5. 정식 on-demand 알림 채널 — `immediate_send_requests`
+- **위치**: `app/domains/immediate_send/` 도메인, `immediate_send_requests` 테이블, `notification_history.immediate_send_request_id` 컬럼, alembic 0005.
+- **역할**: "프론트 버튼 → 백엔드 INSERT → 봇 폴링 → DM" 경로로 알림 종류별 즉시 발송을 제공한다. 컨테이너 경계(PG 매개)를 준수하면서 즉시성을 확보하는 정식 채널이며, 정기 알림 시스템과 별개 경로로 공존한다.
+- **현재 가동 종류**: LUNCH (`POST /api/v1/me/immediate-send/lunch`), TRANSIT (`POST /api/v1/me/immediate-send/transit`). LIBRARY 는 봇 측 §D Library Crawler 본체 작업과 같은 PR 에 추가.
+- **확장 패턴**: 도메인 `type` enum 은 TRANSIT/LUNCH/LIBRARY 모두 받는다. 새 종류 추가는 다음 4 단계.
+  1. `schemas.py` 에 `<Type>DispatchRequest`/`<Type>DispatchResponse` 추가 + Field description/examples 동봉.
+  2. `service.py` 에 `request_<type>_dispatch(user, body)` 메서드 — `payload` 는 봇 워커가 필요로 하는 키만 그대로 dict 화.
+  3. `router.py` 에 `POST /<type>` 핸들러 추가 + `responses=` 401/422/429 문서화.
+  4. 봇 측에 `app/notifications/<type>/repository.py` (LEFT JOIN 가드) + `run_immediate_send_<type>_job` worker + scheduler 잡 등록.
+- **테이블/마이그레이션은 손대지 않는다** — 0005 가 이미 enum 3종 모두를 받게 만들어 둠. payload JSONB 는 알림 종류별 의미가 다른 자유 dict 라 새 컬럼을 늘리지 않는다.
+- **`IMMEDIATE_SEND_RATE_LIMITED` 도메인 예외**: 정의돼 있으나 service 가 실제 rate-limit 검사를 수행하지 않는다 (별 PR). 정책 확정 후 service 진입 시점에 동일 user_id + pending 상태 검사 추가.
+- **연결 채널**: 봇 측 `bot/app/notifications/<type>/` 워커가 짝을 이룬다. 봇 roadmap §C-3 (lunch) + transit 즉시 발송 (커밋 미정).
 
 ## E. 봇 컨테이너 흐름과 맞물리는 영역 (백엔드 측 책임 한정)
 

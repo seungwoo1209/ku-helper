@@ -21,6 +21,7 @@ _EXPECTED_INTERVAL_SECONDS = {
     "lunch_poll": LUNCH_TICK_SECONDS,
     "library_poll": LIBRARY_TICK_SECONDS,
     "immediate_send_lunch_poll": IMMEDIATE_SEND_TICK_SECONDS,
+    "immediate_send_transit_poll": IMMEDIATE_SEND_TICK_SECONDS,
 }
 
 
@@ -68,3 +69,18 @@ def test_register_jobs_sets_overlap_and_misfire_guards(job_ctx: JobContext) -> N
         # coalesce=True: 지연 후 누적된 트리거가 한 번에 폭주하는 회귀 방지.
         assert job.coalesce is True
         assert job.misfire_grace_time is not None
+
+
+def test_immediate_send_transit_poll_registered_with_ctx(job_ctx: JobContext) -> None:
+    """immediate_send_transit_poll 잡이 5초 인터벌 + args=[ctx] 로 등록되어야 한다."""
+    scheduler = AsyncIOScheduler()
+    register_jobs(scheduler, job_ctx)
+
+    job = next(
+        (j for j in scheduler.get_jobs() if j.id == "immediate_send_transit_poll"), None
+    )
+    assert job is not None, "immediate_send_transit_poll 잡이 등록되지 않음"
+    assert isinstance(job.trigger, IntervalTrigger)
+    assert job.trigger.interval.total_seconds() == IMMEDIATE_SEND_TICK_SECONDS
+    # args 에 ctx 가 포함되어야 한다.
+    assert job_ctx in job.args

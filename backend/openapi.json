@@ -797,64 +797,50 @@
         ]
       }
     },
-    "/api/lunch/cafeteria": {
-      "get": {
+    "/api/v1/me/immediate-send/transit": {
+      "post": {
         "tags": [
-          "lunch"
+          "immediate-send"
         ],
-        "summary": "Get Cafeteria",
-        "description": "오늘의 학식 메뉴. 주간 캐시가 없으면 자동 크롤링.",
-        "operationId": "get_cafeteria_api_lunch_cafeteria_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
+        "summary": "즉시 교통 DM 발송 요청",
+        "description": "현재 사용자에게 지정한 역·호선의 지하철 도착 정보 DM 을 즉시 보내달라는 요청을 큐 테이블 (`immediate_send_requests`) 에 INSERT 하고 202 로 즉시 반환한다.\n\n**처리 흐름**: 봇 컨테이너가 5초 간격으로 큐를 폴링 → pending 행을 픽업 → 서울 공공 API 로 실시간 도착 조회 → Discord DM 발송 → 큐 상태 업데이트.\n\n**인증 필요**: `Authorization: Bearer <access>` 헤더. 401 사유는 `INVALID_TOKEN` 또는 `USER_DELETED`.\n\n**쿨다운**: 동일 사용자의 미처리 요청이 큐에 남아 있으면 429 `IMMEDIATE_SEND_RATE_LIMITED` 로 거절된다. 이후 상태 조회 엔드포인트는 후속.",
+        "operationId": "dispatch_transit_now_api_v1_me_immediate_send_transit_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitDispatchRequest"
               }
             }
-          }
-        }
-      }
-    },
-    "/api/lunch/restaurants": {
-      "get": {
-        "tags": [
-          "lunch"
-        ],
-        "summary": "Get Restaurants",
-        "description": "건국대 주변 맛집 3곳 무작위 추천. 일일 캐시가 없으면 자동 수집.",
-        "operationId": "get_restaurants_api_lunch_restaurants_get",
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
-            "description": "Successful Response",
+          "202": {
+            "description": "큐 적재 결과 (request_id, requested_at)",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TransitDispatchResponse"
+                }
               }
             }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "422": {
+            "description": "station_name·line 형식 검증 실패"
+          },
+          "429": {
+            "description": "동일 사용자의 처리 대기 요청이 이미 큐에 존재 (IMMEDIATE_SEND_RATE_LIMITED)"
           }
-        }
-      }
-    },
-    "/api/lunch/today": {
-      "get": {
-        "tags": [
-          "lunch"
-        ],
-        "summary": "Get Today",
-        "description": "학식 + 맛집 추천을 한 번에 반환한다.",
-        "operationId": "get_today_api_lunch_today_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
           }
-        }
+        ]
       }
     },
     "/health": {
@@ -1106,6 +1092,77 @@
               "notify_at": "11:30:00",
               "recommend_count": 5
             }
+          }
+        ]
+      },
+      "TransitDispatchRequest": {
+        "properties": {
+          "station_name": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Station Name",
+            "description": "서울 지하철 역 이름 (한글). 봇이 서울 공공 API 의 `stationName` 파라미터로 그대로 전달하므로 공공 API 의 역명 표기와 일치해야 한다.",
+            "examples": [
+              "강남"
+            ]
+          },
+          "line": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Line",
+            "description": "호선 표기. '2호선', '경의중앙선' 등 한글 표기 그대로. 봇이 임베드 title·필터 표현에 사용한다.",
+            "examples": [
+              "2호선"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_name",
+          "line"
+        ],
+        "title": "TransitDispatchRequest",
+        "description": "`POST /me/immediate-send/transit` 의 요청 body.\n\nF-07 정기 교통 알림과 동일한 두 필수 키 (`station_name`, `line`) 만 받는다.\n즉시 발송은 1회성이라 정기 알림의 활성 시간대(`start_time`/`end_time`)·반복 주기\n(`repeat_interval_minutes`) 는 의미가 없어 받지 않는다.",
+        "examples": [
+          {
+            "line": "2호선",
+            "station_name": "강남"
+          }
+        ]
+      },
+      "TransitDispatchResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "큐 적재 row 의 PK. 후속 상태 조회·로그 추적용.",
+            "examples": [
+              42
+            ]
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At",
+            "description": "서버가 요청을 INSERT 한 시각 (ISO 8601, UTC).",
+            "examples": [
+              "2026-05-20T11:25:30+00:00"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "requested_at"
+        ],
+        "title": "TransitDispatchResponse",
+        "description": "`POST /me/immediate-send/transit` 의 202 응답.\n\nAPI 는 큐 테이블 (`immediate_send_requests`) 에 한 줄을 INSERT 하고 즉시 반환한다.\n실제 도착 정보 조회와 Discord DM 발송은 봇 컨테이너의 폴링 잡(5초 간격)이 수행.\n`LunchDispatchResponse` 와 응답 포맷은 동일하지만 도메인 의미가 다르므로 별도 모델로 둔다.",
+        "examples": [
+          {
+            "request_id": 42,
+            "requested_at": "2026-05-20T11:25:30+00:00"
           }
         ]
       },

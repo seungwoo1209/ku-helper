@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from app.domains.immediate_send.models import ImmediateSendRequest
+from app.domains.immediate_send.schemas import TransitDispatchRequest
 from app.domains.immediate_send.service import ImmediateSendService
 from app.domains.notifications.models import NotificationType
 from app.domains.users.models import User, UserRole, UserStatus
@@ -45,3 +46,25 @@ async def test_request_lunch_dispatch_calls_repository_with_lunch_type() -> None
     assert request.type == NotificationType.LUNCH
     assert request.user_id == 42
     assert repo.created == [(42, NotificationType.LUNCH, {})]
+
+
+@pytest.mark.asyncio
+async def test_request_transit_dispatch_calls_repository_with_transit_payload() -> None:
+    repo = _FakeRepository()
+    service = ImmediateSendService(repo)  # type: ignore[arg-type]
+    user = User(
+        id=7,
+        discord_id=987654321,
+        discord_username="commuter",
+        status=UserStatus.ACTIVE,
+        role=UserRole.USER,
+    )
+    body = TransitDispatchRequest(station_name="강남", line="2호선")
+
+    request = await service.request_transit_dispatch(user, body)
+
+    assert request.type == NotificationType.TRANSIT
+    assert request.user_id == 7
+    assert repo.created == [
+        (7, NotificationType.TRANSIT, {"station_name": "강남", "line": "2호선"})
+    ]

@@ -32,4 +32,5 @@ class JobContext:
     # 만들어지지 못한 경우(키 미설정 등) None 이며 worker 는 skip.
     lunch_client: "LunchClient | None" = None
     restaurants_client: "RestaurantsClient | None" = None
-    lunch_inflight: set[int] = field(default_factory=set)
+    # lunch + transit 즉시 발송 worker 가 공유. request_id 단일 시퀀스라 lunch/transit 간 충돌 없음.
+    immediate_send_inflight: set[int] = field(default_factory=set)

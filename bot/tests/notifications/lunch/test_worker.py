@@ -68,7 +68,7 @@ def _make_ctx(
     )
     ctx.lunch_client = lunch_client
     ctx.restaurants_client = restaurants_client
-    ctx.lunch_inflight = set()
+    ctx.immediate_send_inflight = set()
 
     # repository.list_pending 결과를 고정.
     async def _fake_list_pending(*a: Any, **k: Any) -> list[ImmediateSendRequestRow]:
@@ -107,7 +107,7 @@ async def test_run_immediate_send_lunch_job_queues_task_on_happy_path(
     assert task.user_id == 1
     assert task.discord_id == 99
     assert task.notification_id is None
-    assert 10 in ctx.lunch_inflight
+    assert 10 in ctx.immediate_send_inflight
 
 
 @pytest.mark.asyncio
@@ -132,7 +132,7 @@ async def test_run_immediate_send_lunch_job_dedup_within_same_tick(
         rows, lunch_result=_menu(), restaurants_result=pool
     )
     # 이미 in-flight 에 들어 있으면 skip 되어야 함.
-    ctx.lunch_inflight = {20}
+    ctx.immediate_send_inflight = {20}
 
     async def _fake_list_pending(self: Any, type_: Any, limit: int = 50) -> list[Any]:
         return rows
@@ -197,4 +197,4 @@ async def test_run_immediate_send_lunch_job_writes_failed_history_on_crawler_err
     assert queue.qsize() == 0
     assert len(failed_inserts) == 1
     assert failed_inserts[0]["immediate_send_request_id"] == 30
-    assert 30 not in ctx.lunch_inflight
+    assert 30 not in ctx.immediate_send_inflight

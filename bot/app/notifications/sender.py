@@ -53,7 +53,7 @@ async def run_sender_worker(
     discord_client: DiscordBotClient,
     session_maker: async_sessionmaker[AsyncSession],
     in_flight_notification_ids: set[int] | None = None,
-    lunch_inflight: set[int] | None = None,
+    immediate_send_inflight: set[int] | None = None,
 ) -> None:
     """Sender 큐를 소비하는 워커 코루틴.
 
@@ -72,7 +72,9 @@ async def run_sender_worker(
     _in_flight = (
         in_flight_notification_ids if in_flight_notification_ids is not None else set()
     )
-    _lunch_inflight = lunch_inflight if lunch_inflight is not None else set()
+    _immediate_send_inflight = (
+        immediate_send_inflight if immediate_send_inflight is not None else set()
+    )
 
     while True:
         task = await queue.get()
@@ -91,7 +93,7 @@ async def run_sender_worker(
             if task.notification_id is not None:
                 _in_flight.discard(task.notification_id)
             if task.immediate_send_request_id is not None:
-                _lunch_inflight.discard(task.immediate_send_request_id)
+                _immediate_send_inflight.discard(task.immediate_send_request_id)
 
 
 async def _process_task(

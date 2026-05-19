@@ -3,7 +3,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.notifications.library.worker import run_library_job
 from app.notifications.lunch.worker import run_immediate_send_lunch_job, run_lunch_job
-from app.notifications.transit.worker import run_transit_job
+from app.notifications.transit.worker import (
+    run_immediate_send_transit_job,
+    run_transit_job,
+)
 from app.scheduler.context import JobContext
 
 # 알림 종류별 폴링 주기. TRANSIT/LIBRARY 는 외부 데이터 변화에 빨리 반응해야 하고,
@@ -56,6 +59,15 @@ def register_jobs(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:
         run_immediate_send_lunch_job,
         trigger=IntervalTrigger(seconds=IMMEDIATE_SEND_TICK_SECONDS),
         id="immediate_send_lunch_poll",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+        args=[ctx],
+    )
+    scheduler.add_job(
+        run_immediate_send_transit_job,
+        trigger=IntervalTrigger(seconds=IMMEDIATE_SEND_TICK_SECONDS),
+        id="immediate_send_transit_poll",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=_MISFIRE_GRACE_SECONDS,

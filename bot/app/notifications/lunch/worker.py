@@ -35,7 +35,7 @@ async def run_lunch_job() -> None:
 async def run_immediate_send_lunch_job(ctx: JobContext) -> None:
     """immediate_send_requests (type=LUNCH) 폴링 → 학식·맛집 조회 → Sender 큐 적재.
 
-    중복 적재는 ctx.lunch_inflight set 으로 방지. Sender 가 history INSERT 한 뒤
+    중복 적재는 ctx.immediate_send_inflight set 으로 방지. Sender 가 history INSERT 한 뒤
     finally 에서 discard. 봇 재기동 시에는 메모리 set 이 비고 history join 가드만으로 보호.
     """
     lunch_client = ctx.lunch_client
@@ -54,9 +54,9 @@ async def run_immediate_send_lunch_job(ctx: JobContext) -> None:
         _logger.info("immediate_send_lunch_tick", count=len(rows))
 
         for row in rows:
-            if row.id in ctx.lunch_inflight:
+            if row.id in ctx.immediate_send_inflight:
                 continue
-            ctx.lunch_inflight.add(row.id)
+            ctx.immediate_send_inflight.add(row.id)
             try:
                 menu, pool = await asyncio.gather(
                     lunch_client.fetch_today_menu(),
@@ -92,7 +92,7 @@ async def run_immediate_send_lunch_job(ctx: JobContext) -> None:
                     )
                     await session.commit()
                 # in-flight 에서 즉시 빼서 같은 row 가 다음 틱에 재시도되지 않도록.
-                ctx.lunch_inflight.discard(row.id)
+                ctx.immediate_send_inflight.discard(row.id)
                 continue
 
             sampled = (

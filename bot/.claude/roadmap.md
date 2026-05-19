@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-19 — origin/main 머지 완료 (frontend + 부채 lunch 경로 유입). 다음은 backend immediate_send 도메인 + bot §C-1 정식 lunch crawler·즉시 발송 worker 구현.
+마지막 갱신: 2026-05-20 — TRANSIT 즉시 발송 종단 추가 (`POST /api/v1/me/immediate-send/transit` ↔ `run_immediate_send_transit_job`). lunch + transit 두 종 즉시 발송 정식 운영. backend §D-5 / bot §D-5 모두 "정식 on-demand 채널" 로 승격.
 
 ## 진행 상황 스냅샷
 
@@ -17,8 +17,9 @@
 - worker 버그 2건 수정 (커밋 `18668ce`): (1) `cfg.get("interval_minutes")` → `repeat_interval_minutes` 키 교정 — 기존엔 interval 가드가 비활성화돼 매 틱 재발송 위험. (2) UTC 문자열 사전식 비교 → KST `datetime.time` 객체 비교 (`zoneinfo.ZoneInfo("Asia/Seoul")` + `_parse_config_time` helper). 회귀 가드 2건 추가.
 - 실 DM 1건 발송 검증 (2026-05-19 18:24 KST): user_id=1 (`dogbugbaby`) 강남역 2호선 F-07 구독 → `transit_queued` → `dm_sent` → `notification_history` SUCCESS row 1건. 임베드 4 필드(내선/외선 각 2건).
 - §A-3 발송 실패 재시도 (F-21) 완료 (커밋 미정): `RETRY_BACKOFF_SECONDS=(1.0, 2.0)` + `_MAX_ATTEMPTS=3`. `_process_task` 에 retry 루프 추가. INSERT 마지막 1회만. `dm_send_retry`/`dm_failed`/`dm_sent` 로그 키 유지. 회귀 가드 4건 추가.
-- 테스트: **37 passing** (이전 33 + §A-3 회귀 가드 4). 카테고리: `tests/scheduler/test_jobs.py`, `tests/core/test_discord.py`, `tests/notifications/test_sender.py`, `tests/crawlers/subway/test_client.py`, `tests/notifications/transit/test_worker.py`, `tests/notifications/transit/test_embeds.py`.
-- origin/main 머지 (커밋 `e9ddc7f`): frontend 대시보드 + backend `routes/lunch.py` 부채 경로 + `bot/scrapers/` 부채 경로 유입. 백엔드 D-4 부채는 폐기 완료 (backend `routes/`, `data/` 삭제 + `bot/scrapers/` 삭제). 봇 측 D-5 부채 잔여 — 알려진 부채 절 참고.
+- TRANSIT 즉시 발송 종단 (커밋 미정): `ImmediateSendTransitRepository.list_pending` (LEFT JOIN 가드 + ACTIVE 필터 + type=TRANSIT) + `run_immediate_send_transit_job` (lunch 즉시 발송 워커 패턴 미러, SubwayClient 호출 + `build_transit_recurring_embed` 재사용) + `immediate_send_transit_poll` 잡 등록 (5초 인터벌). `lunch_inflight` → `immediate_send_inflight` 로 일반화하여 lunch + transit 즉시 발송 워커가 단일 in-flight 셋을 공유 (request_id 단일 시퀀스라 충돌 없음).
+- 테스트: **60 passing** (이전 37 + 즉시 발송 transit 회귀 가드 23: worker 4 + repository 4 + scheduler 1 + 기존 jobs/worker 케이스 확장 14). 신규 파일: `tests/notifications/transit/test_repository.py`.
+- origin/main 머지 (커밋 `e9ddc7f`): frontend 대시보드 + backend `routes/lunch.py` 부채 경로 + `bot/scrapers/` 부채 경로 유입. 백엔드 D-4 부채는 폐기 완료 (backend `routes/`, `data/` 삭제 + `bot/scrapers/` 삭제). 봇 측 D-5 도 정식 채널로 승격 — 알려진 부채 절 참고.
 
 인터페이스 합의 대기 (백엔드 결정 필요):
 - `notification_history.payload` JSONB 스키마 — backend roadmap §E-1. 현재는 임시 dict 로 INSERT 중.
@@ -36,8 +37,9 @@
 - 봇이 `notification.config` 를 raw `dict` 로 읽음 — Pydantic 검증 없음. 백엔드 스키마 키 이름 변경이 워커에서 silently fail 가능 (실제로 `repeat_interval_minutes` ↔ `interval_minutes` 회귀 발생). 후속 정리: `app/notifications/transit/config_parsers.py` 같은 봇 측 Pydantic 모델 도입 또는 backend 와 schema 공유 패키지.
 - transit 윈도우 비교가 KST 고정 (`zoneinfo.ZoneInfo("Asia/Seoul")`). 다국가 확장 시 사용자별 timezone 컬럼 필요 — 현재 단일 캠퍼스 한정이라 보류.
 - 학식 크롤러가 Playwright 의존 — 봇 컨테이너 이미지 크기 ↑. 추후 부하 측정 후 별도 컨테이너로 분리 검토.
-- 즉시 발송 dedupe 는 `notification_history.immediate_send_request_id` FK 의존 — 봇은 SELECT 만, UPDATE 권한 없음. 백엔드 roadmap §D-5 가 같은 라이프사이클.
-- 봇 측 `app/notifications/lunch/` 워커는 §D-5 (백엔드) 와 함께 폐기 예정. 정식 알림 시스템 도입 시 통합.
+- 즉시 발송 dedupe 는 `notification_history.immediate_send_request_id` FK 의존 — 봇은 SELECT 만, UPDATE 권한 없음. 백엔드 roadmap §D-5 (정식 on-demand 채널) 와 같은 라이프사이클.
+- 즉시 발송 lunch/transit 워커가 `ImmediateSendRequestRow` dataclass 를 `bot/app/notifications/lunch/repository.py` 에서 공유한다. 알림 종류별 payload 검증이 필요해지는 시점에 `app/notifications/repository.py` 또는 `app/notifications/immediate_send/` 공통 모듈로 이전한다. 현재는 LIBRARY 즉시 발송 추가 시 같은 패턴을 따르면 충분.
+- `immediate_send_inflight` 메모리 셋 — 봇 재기동 시 비워진다. 같은 request_id 가 두 번 처리되는 회귀는 `notification_history.immediate_send_request_id` partial unique 인덱스 + LEFT JOIN 가드로 INSERT 단계에서 막힌다 (DM 자체가 두 번 발송될 가능성은 거의 없음 — 5초 폴링 간격 내 재기동만 위험).
 - Lunch/Restaurants 크롤러가 Redis 캐시 없이 모듈 dict 캐시만 사용. 봇 재기동 시 첫 요청에서 재크롤링. §C-1 정식 일정에 Redis 캐시 추가.
 - **아키텍처 예외: Lunch worker 직접 FAILED INSERT** — `app/notifications/lunch/worker.py` 의 crawler 실패 분기에서 워커가 `NotificationHistoryRepository.insert_result` 를 직접 호출한다. `CLAUDE.md` rule 5 ("Sender 만 INSERT") + architecture.md Worker 절을 우회. 이유: crawler 가 실패하면 embed/payload 를 만들 수 없어 Sender 큐에 넣을 task 자체가 없는데, history row 가 없으면 `list_pending` 의 LEFT JOIN 가드가 풀리지 않아 매 5초 재시도된다. 정식 정리 후보: `SendDmTask` 에 "이미 실패 확정" 플래그를 두고 Sender 가 그 케이스에선 send 호출을 건너뛰고 history INSERT 만 수행하도록 통합. transit worker 의 SubwayClient 실패 분기도 같은 패턴을 갖게 되면 함께 리팩터.
 
@@ -175,7 +177,7 @@
 
 ## 권장 순서
 
-**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 즉시 발송 (진행) → §B(F-06) → §C-4 → §D → §E → §F → §G**
+**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (진행) → TRANSIT 즉시 발송 (완료) → §B(F-06) → §C-4 → §D (LIBRARY 즉시 발송 동반) → §E → §F → §G**
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 
