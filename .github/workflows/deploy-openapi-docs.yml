@@ -42,7 +42,7 @@ jobs:
 
       - name: Regenerate openapi.json
         working-directory: ./backend
-        env:
+        env: # dummy env variable로 FastAPI 애플리케이션 실행
           DATABASE_URL: postgresql+asyncpg://user:pass@localhost:5432/dummy
           CORS_ORIGINS: '["http://localhost:3000"]'
           JWT_SECRET: ci-dummy-secret-not-used-at-runtime
