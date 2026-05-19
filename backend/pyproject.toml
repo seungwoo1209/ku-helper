@@ -6,8 +6,6 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.136.1",
     "uvicorn[standard]>=0.46.0",
-    "playwright>=1.44.0",
-    "python-dotenv>=1.0.0",
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.30",
     "pydantic-settings>=2.0",
@@ -33,16 +31,6 @@ dev = [
 asyncio_mode = "strict"
 testpaths = ["tests"]
 addopts = "-ra"
-
-[tool.mypy]
-# routes/ 는 origin/main 머지로 유입된 부채 경로 (CLAUDE.md §D-4). bot.scrapers
-# 를 직접 import 해 컨테이너 경계를 위반한다. mypy 분석에서 제외해 우리 도메인의
-# 타입 검증을 가린지 않게 한다.
-exclude = ["routes/"]
-
-[[tool.mypy.overrides]]
-module = ["routes.*"]
-ignore_errors = true
 
 [tool.coverage.run]
 source = ["app"]

@@ -5,7 +5,7 @@ Page 만 생성·종료한다. 모듈 dict 캐시는 ISO 주 단위 (asyncio.Loc
 
 Redis TTL 캐시 도입은 §C-1 Redis 일정 이후.
 
-페이지 구조 (2026-05 기준, `bot/scrapers/cafeteria.py` 부채 경로의 docstring 참고):
+페이지 구조 (2026-05 기준; 이전 부채 경로 `bot/scrapers/cafeteria.py` 는 삭제됨 — git 히스토리 참고):
 - 목록 페이지: https://www.konkuk.ac.kr/general/18211/subview.do
 - "주간 메뉴" 링크 클릭 → AJAX 인라인 로딩.
 - 식단 테이블 thead.evtthd / tbody.popTbd.
