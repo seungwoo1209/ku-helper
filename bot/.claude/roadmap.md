@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-19 (§A-3 F-21 발송 실패 재시도 완료. 다음은 §B(F-06) 또는 §0-1 잔여).
+마지막 갱신: 2026-05-19 — origin/main 머지 완료 (frontend + 부채 lunch 경로 유입). 다음은 backend immediate_send 도메인 + bot §C-1 정식 lunch crawler·즉시 발송 worker 구현.
 
 ## 진행 상황 스냅샷
 
@@ -18,6 +18,7 @@
 - 실 DM 1건 발송 검증 (2026-05-19 18:24 KST): user_id=1 (`dogbugbaby`) 강남역 2호선 F-07 구독 → `transit_queued` → `dm_sent` → `notification_history` SUCCESS row 1건. 임베드 4 필드(내선/외선 각 2건).
 - §A-3 발송 실패 재시도 (F-21) 완료 (커밋 미정): `RETRY_BACKOFF_SECONDS=(1.0, 2.0)` + `_MAX_ATTEMPTS=3`. `_process_task` 에 retry 루프 추가. INSERT 마지막 1회만. `dm_send_retry`/`dm_failed`/`dm_sent` 로그 키 유지. 회귀 가드 4건 추가.
 - 테스트: **37 passing** (이전 33 + §A-3 회귀 가드 4). 카테고리: `tests/scheduler/test_jobs.py`, `tests/core/test_discord.py`, `tests/notifications/test_sender.py`, `tests/crawlers/subway/test_client.py`, `tests/notifications/transit/test_worker.py`, `tests/notifications/transit/test_embeds.py`.
+- origin/main 머지 (커밋 `e9ddc7f`): frontend 대시보드 + backend `routes/lunch.py` 부채 경로 + `bot/scrapers/` 부채 경로 유입. 부채는 D-4/D-5 (백엔드 roadmap) 와 본 파일 알려진 부채 절 참고.
 
 인터페이스 합의 대기 (백엔드 결정 필요):
 - `notification_history.payload` JSONB 스키마 — backend roadmap §E-1. 현재는 임시 dict 로 INSERT 중.
@@ -34,6 +35,11 @@
 - SubwayClient 가 Redis 캐시 없이 매 5초 틱마다 외부 API 호출. 같은 station 의 구독은 한 틱 내 dict 캐시로 호출 1회로 합쳐짐. 본격 부하 시 Redis TTL 캐시(§C-1) 도입.
 - 봇이 `notification.config` 를 raw `dict` 로 읽음 — Pydantic 검증 없음. 백엔드 스키마 키 이름 변경이 워커에서 silently fail 가능 (실제로 `repeat_interval_minutes` ↔ `interval_minutes` 회귀 발생). 후속 정리: `app/notifications/transit/config_parsers.py` 같은 봇 측 Pydantic 모델 도입 또는 backend 와 schema 공유 패키지.
 - transit 윈도우 비교가 KST 고정 (`zoneinfo.ZoneInfo("Asia/Seoul")`). 다국가 확장 시 사용자별 timezone 컬럼 필요 — 현재 단일 캠퍼스 한정이라 보류.
+- `bot/scrapers/cafeteria.py` + `bot/scrapers/restaurants.py` + `bot/scrapers/__init__.py` + `bot/__init__.py` + `bot/data/.gitkeep` + `bot/.gitignore` 외 2줄 — backend `routes/lunch.py` 가 `from bot.scrapers ...` 로 import 하는 부채 경로. 봇 아키텍처(`app/crawlers/<source>/`) 위배. 새 `app/crawlers/lunch/` + `app/crawlers/restaurants/` 와 코드 중복. **프론트 LunchScreen 의 `useTodayLunch` 훅 제거되면 같이 폐기.** 백엔드 roadmap §D-4.
+- 학식 크롤러가 Playwright 의존 — 봇 컨테이너 이미지 크기 ↑. 추후 부하 측정 후 별도 컨테이너로 분리 검토.
+- 즉시 발송 dedupe 는 `notification_history.immediate_send_request_id` FK 의존 — 봇은 SELECT 만, UPDATE 권한 없음. 백엔드 roadmap §D-5 가 같은 라이프사이클.
+- 봇 측 `app/notifications/lunch/` 워커는 §D-5 (백엔드) 와 함께 폐기 예정. 정식 알림 시스템 도입 시 통합.
+- Lunch/Restaurants 크롤러가 Redis 캐시 없이 모듈 dict 캐시만 사용. 봇 재기동 시 첫 요청에서 재크롤링. §C-1 정식 일정에 Redis 캐시 추가.
 
 ## §0. 부트스트랩 (3-PR 분량)
 
@@ -91,18 +97,31 @@
 ### B-4. F-08 혼잡도·지연 정보 (우선순위: 중)
 - 임베드 필드에 혼잡도(여유/보통/혼잡) + 지연 사유·예상 지연 시간 포함.
 
-## §C. 점심 알림
+## §C. 점심 알림 — 즉시 발송 종단 우선
 
-### C-1. Lunch Crawler
-- `app/crawlers/lunch/client.py`: 학식 페이지 크롤링 + Redis 캐시.
-- 크롤링 정책 준수: 최소 1초 간격, User-Agent 명시.
+### C-1. 정식 Lunch Crawler — 진행 중
+- `app/crawlers/lunch/client.py`: 건국대 학식 페이지 Playwright 크롤링. `LunchMenu`/`LunchCorner` dataclass 반환. 모듈 dict 캐시(ISO 주 단위, asyncio.Lock 가드).
+- lifespan 에서 단일 `playwright`+`chromium Browser` 인스턴스 생성·재사용. 매 호출은 새 context 만 생성·종료.
+- 도메인 예외: `LunchCrawlerFailed` (selector 미일치·timeout 등). raw httpx/Playwright 예외 위로 흘리지 않음.
+- 데이터 소스 URL·selector 는 `bot/scrapers/cafeteria.py` (부채) 의 셀렉터 정보를 **참고만** 해 옮긴다. import 금지.
+- Redis TTL 캐시는 후속 (Redis 도입 시 키 `lunch:cafeteria:{iso_week}` TTL 7일).
 
-### C-2. 주변 음식점 추천 (F-09)
-- 데이터 소스 결정 필요 — 정적 JSON(번들) vs 외부 API. backend roadmap §E-1 합의에 따라 결정.
-- 결정 후: `app/crawlers/restaurants/` 추가 또는 봇 내 정적 데이터 로더.
+### C-2. 정식 Restaurants Crawler — 진행 중
+- `app/crawlers/restaurants/client.py`: Naver Local Search API. `Restaurant` dataclass 반환. 카테고리 10건 × 5건 → dedup → 풀.
+- 키 격리: `Settings.naver_search_client_id: str`, `Settings.naver_search_client_secret: SecretStr`.
+- 모듈 dict 캐시(날짜 단위). Redis TTL 캐시는 후속.
+- 도메인 예외: `RestaurantsCrawlerFailed` (HTTP 4xx/5xx).
+- `bot/scrapers/restaurants.py` (부채) 의 `_QUERIES`·`_normalize`·HTML entity 정제 로직을 참고해 dataclass 래핑·structlog 추가·`Settings` 키 사용으로 재작성.
 
-### C-3. F-10 가격 필터, F-12 오늘의 추천
+### C-3. 즉시 발송 Lunch Worker — 진행 중
+- `app/notifications/lunch/worker.py:run_immediate_send_lunch_job`: 5초 간격 폴링. `immediate_send_requests` (type=LUNCH, status=ACTIVE 사용자, history join 으로 미발송) 픽업.
+- 각 row 별 `asyncio.gather(LunchClient.fetch_today_menu(), RestaurantsClient.fetch_pool())` 병렬 호출 → `random.sample(pool, 3)` → `build_lunch_immediate_embed` → Sender 큐 적재.
+- in-flight set 으로 같은 틱 중복 적재 방지. history INSERT 후 sender 가 set 에서 discard. transit F-07 패턴 재사용.
+- `SendDmTask` 에 `immediate_send_request_id` 필드 추가. `notification_id` 와 mutually exclusive.
+
+### C-4. F-10 가격 필터, F-12 오늘의 추천 — 후속
 - 가격 필터는 worker 단계에서. 오늘의 추천 하이라이트는 이전 추천 이력을 어디서 읽을지(history `payload` 활용) 결정 필요.
+- 정식 알림 시스템(스케줄 기반) 도입 시 다룬다. 현재 즉시 발송 종단만 우선.
 
 ## §D. 도서관 알림 + F-14 상태 기반 중복 방지
 
@@ -156,10 +175,11 @@
 
 ## 권장 순서
 
-**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 → §B(F-06) → §C/§D → §E → §F → §G**
+**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 즉시 발송 (진행) → §B(F-06) → §C-4 → §D → §E → §F → §G**
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 
 병행 가능 항목 (§A-3 와 충돌하지 않음):
 - §0-1 잔여: `Dockerfile` / `docker-compose.test.yml` — §G-3 CI 와 같은 PR로 묶어도 무방.
 - §0-3 잔여: alembic 호환성 통합 테스트 1건.
+- §C-1 (Lunch Crawler) + §C-2 (Restaurants Crawler) 진행 중 — §A-3 완료 이후 즉시 착수. §C-3 즉시 발송 worker 는 §C-1·C-2 완료 후 진행.

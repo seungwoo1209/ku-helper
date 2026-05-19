@@ -4,7 +4,7 @@
 현재 봇 컨테이너 작업이 우선이라 잠시 보류 중이지만, 백엔드 PR을 다시 시작할 때
 **여기서부터 읽어서 컨텍스트를 복구**할 것.
 
-마지막 갱신: 2026-05-18 (backend/user 브랜치 기준, HEAD: 탈퇴 시 history cascade).
+마지막 갱신: 2026-05-19 (feat/bot 브랜치 머지 후. lunch 즉시 DM 종단 신설 + 기존 `routes/lunch.py` 부채 명시).
 
 ## 진행 상황 스냅샷
 
@@ -83,6 +83,20 @@
 - GitHub Actions 미구성. 매 PR 수동 검증 중.
 - 워크플로: docker-compose.test.yml 기동 + `uv sync` + `uv run ruff check` + `uv run mypy app tests` + `uv run pytest --cov`.
 - 별 PR로 가벼움. 위 어느 작업에든 합쳐도 무방.
+
+### D-4. 폐기 예정 — `routes/lunch.py` 경로 (origin/main 머지로 유입)
+- **위치**: 루트 `backend/routes/lunch.py`, `backend/routes/__init__.py`, `backend/app/main.py` 의 `include_router(lunch_router)`, `backend/pyproject.toml` 의 `playwright`·`python-dotenv` 의존성, `backend/data/.gitkeep`.
+- **위반**: `app/domains/` 컨벤션 무시, `sys.path` 조작, `load_dotenv()` 직접 호출, `from bot.scrapers ...` 로 봇 컨테이너 코드를 직접 import. CLAUDE.md 의 "백엔드는 PG·Redis 매개로만 봇과 통신" 규칙 정면 위배.
+- **유지 사유**: 프론트 `frontend/src/screens/LunchScreen.jsx` 의 `useTodayLunch` 훅이 `/api/lunch/today` 를 호출. 깨뜨리지 않기 위해 부채로 보존.
+- **폐기 조건**: 프론트 팀이 LunchScreen 라이브 패널을 제거 → 그 시점에 라우터·모듈·의존성·`backend/data/`·`bot/scrapers/` 일괄 삭제.
+- **연결 부채**: 같은 import 사슬에서 `bot/scrapers/cafeteria.py`, `bot/scrapers/restaurants.py` 도 함께 보존. 봇 아키텍처 위배(`bot/.claude/roadmap.md` 참고).
+
+### D-5. 폐기 예정 — `immediate_send_requests` 임시 구조
+- **위치**: `app/domains/immediate_send/` 도메인, `immediate_send_requests` 테이블, `notification_history.immediate_send_request_id` 컬럼, 알embic 0005.
+- **존재 사유**: "즉시 lunch DM" 종단 검증용. 프론트 버튼 → 백엔드 INSERT → 봇 폴링 → DM. 컨테이너 경계(PG 매개) 를 준수하면서 즉시성 확보.
+- **잠재 확장**: 도메인 `type` enum 이 TRANSIT/LUNCH/LIBRARY 모두 받게 설계됨. 현재 LUNCH 만 사용. 후속에 transit/library 도 같은 경로로 확장 가능.
+- **폐기 조건**: 정식 알림 시스템(스케줄 + on-demand 통합) 도입 시 도메인·테이블·컬럼·라우터 일괄 제거. 그때까지 추가 기능은 이 도메인에 넣지 말고 정식 알림 시스템으로 가는 게 원칙.
+- **연결 부채**: 봇 측 `bot/app/notifications/lunch/` 워커도 같은 라이프사이클. 함께 폐기.
 
 ## E. 봇 컨테이너 흐름과 맞물리는 영역 (백엔드 측 책임 한정)
 
