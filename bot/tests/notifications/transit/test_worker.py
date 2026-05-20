@@ -1,4 +1,4 @@
-"""run_transit_job 단위 테스트 (F-07 recurring 모드) + run_immediate_send_transit_job.
+"""run_transit_job 단위 테스트 (F-07 recurring + F-06 arrival 모드) + run_immediate_send_transit_job.
 
 time-machine 으로 시각 고정, fake SubwayClient/Repository 를 monkeypatch 로 주입.
 APScheduler 를 거치지 않고 잡 함수를 직접 await 한다.
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
+import fakeredis.aioredis
 import httpx
 import pytest
 import time_machine
@@ -24,6 +25,7 @@ from app.db.models import NotificationDeliveryStatus, NotificationType
 from app.notifications.lunch.repository import ImmediateSendRequestRow
 from app.notifications.sender import SendDmTask
 from app.notifications.transit.worker import (
+    _ARRIVAL_REDIS_KEY_TEMPLATE,
     run_immediate_send_transit_job,
     run_transit_job,
 )
@@ -103,25 +105,33 @@ class _RaisingSubwayClient:
         raise SubwayApiUnavailable()
 
 
-def _make_arrival(direction: str = "상행", seconds: int = 120) -> SubwayArrival:
+def _make_arrival(
+    direction: str = "상행",
+    seconds: int = 120,
+    train_no: str = "2001",
+    line_label: str = "2호선",
+) -> SubwayArrival:
     return SubwayArrival(
         station_name="강남",
         subway_id="1002",
-        line_label="2호선",
+        line_label=line_label,
         direction=direction,
         headed_for="성수",
         arrival_message="도착",
         arrival_message_detail="강남 도착",
         arrival_seconds=seconds,
-        train_no="2001",
+        train_no=train_no,
         arvl_code=1,
         train_type="일반",
+        train_line_name="",
+        received_at=None,
     )
 
 
 def _make_ctx(
     queue: asyncio.Queue[SendDmTask] | None = None,
     in_flight: set[int] | None = None,
+    redis_client: Any = None,
 ) -> JobContext:
     from pydantic import SecretStr
 
@@ -134,6 +144,7 @@ def _make_ctx(
         session_maker=_FakeSessionMaker(),  # type: ignore[arg-type]
         settings=settings,
         in_flight_notification_ids=in_flight if in_flight is not None else set(),
+        redis_client=redis_client,
     )
 
 
@@ -334,14 +345,14 @@ async def test_recurring_after_window_skips(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 # ---------------------------------------------------------------------------
-# 케이스 5: mode == "arrival" → skip
+# 케이스 5: mode == "arrival" + redis_client None → skip (warn 로그, 큐 비어 있음)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @time_machine.travel(_FIXED_KST, tick=False)
-async def test_arrival_mode_skips(monkeypatch: pytest.MonkeyPatch) -> None:
-    """mode == 'arrival' → skip (F-06 후속 PR)."""
+async def test_arrival_mode_no_redis_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+    """mode == 'arrival' + redis_client=None → transit_arrival_skip_no_redis warn, 큐 0건."""
     notif = _FakeNotification(
         id=14,
         user_id=1,
@@ -351,12 +362,16 @@ async def test_arrival_mode_skips(monkeypatch: pytest.MonkeyPatch) -> None:
             "mode": "arrival",
             "station_name": "강남",
             "line": "2호선",
+            "direction": "상행",
+            "start_time": "09:00:00",
+            "end_time": "11:00:00",
+            "minutes_before": 5,
         },
     )
     user = _FakeUser(id=1, discord_id=9999)
 
     queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
-    ctx = _make_ctx(queue=queue)
+    ctx = _make_ctx(queue=queue, redis_client=None)
 
     with monkeypatch.context() as m:
         m.setattr(
@@ -366,6 +381,10 @@ async def test_arrival_mode_skips(monkeypatch: pytest.MonkeyPatch) -> None:
         m.setattr(
             "app.notifications.transit.worker.NotificationHistoryRepository",
             lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings: _FakeSubwayClient([_make_arrival()], []),
         )
 
         await run_transit_job(ctx)
@@ -424,6 +443,8 @@ async def test_same_station_fetches_once(monkeypatch: pytest.MonkeyPatch) -> Non
             train_no="9001",
             arvl_code=1,
             train_type="일반",
+            train_line_name="",
+            received_at=None,
         ),
     ]
     fake_client = _FakeSubwayClient(arrivals, call_count)
@@ -880,3 +901,391 @@ async def test_immediate_transit_deleted_user_excluded_at_list_pending(
         "DELETED 사용자 row 는 fetch_arrivals 가 호출되어선 안 된다"
     )
     assert len(history_repo.inserts) == 0
+
+
+# ===========================================================================
+# F-06 arrival 모드 테스트 (fakeredis 사용)
+# ===========================================================================
+
+# KST 2026-05-20 10:00:00 = UTC 2026-05-20 01:00:00
+_ARRIVAL_FIXED_KST = "2026-05-20T10:00:00+09:00"
+_ARRIVAL_FIXED_NOW_UTC = datetime(2026, 5, 20, 1, 0, 0, tzinfo=timezone.utc)
+_ARRIVAL_KST_DATE = "2026-05-20"
+
+_ARRIVAL_NOTIF_CFG: dict[str, Any] = {
+    "mode": "arrival",
+    "station_name": "강남",
+    "line": "2호선",
+    "direction": "상행",
+    "start_time": "09:00:00",
+    "end_time": "11:00:00",
+    "minutes_before": 5,
+}
+
+
+def _make_arrival_ctx(
+    queue: asyncio.Queue[SendDmTask] | None = None,
+    redis: Any = None,
+) -> JobContext:
+    from pydantic import SecretStr
+
+    settings = MagicMock()
+    settings.subway_api_key = SecretStr("test-key")
+
+    return JobContext(
+        queue=queue or asyncio.Queue(),
+        http_client=httpx.AsyncClient(),
+        session_maker=_FakeSessionMaker(),  # type: ignore[arg-type]
+        settings=settings,
+        in_flight_notification_ids=set(),
+        redis_client=redis,
+    )
+
+
+# ---------------------------------------------------------------------------
+# arrival 케이스 1: happy path — train_no 2개 매칭 → 큐 2건 + Redis SET 에 2개
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_ARRIVAL_FIXED_KST, tick=False)
+async def test_arrival_happy_path_enqueues_two_trains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """윈도우 내, 상행 2호선 열차 2대 매칭 → 큐 2건 + Redis SET 에 train_no 2개."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    notif = _FakeNotification(
+        id=200,
+        user_id=10,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config=_ARRIVAL_NOTIF_CFG,
+    )
+    user = _FakeUser(id=10, discord_id=88888)
+
+    arrivals = [
+        _make_arrival(direction="상행", seconds=200, train_no="A001"),
+        _make_arrival(direction="상행", seconds=250, train_no="A002"),
+        _make_arrival(direction="하행", seconds=180, train_no="B001"),  # 방향 미스매치
+    ]
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_arrival_ctx(queue=queue, redis=redis)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif, user)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+        )
+
+        await run_transit_job(ctx)
+
+    assert queue.qsize() == 2
+
+    redis_key = _ARRIVAL_REDIS_KEY_TEMPLATE.format(
+        notification_id=200, kst_date=_ARRIVAL_KST_DATE
+    )
+    members = await redis.smembers(redis_key)
+    assert members == {"A001", "A002"}
+
+
+# ---------------------------------------------------------------------------
+# arrival 케이스 2: train_no 이미 sent → skip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_ARRIVAL_FIXED_KST, tick=False)
+async def test_arrival_already_sent_train_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redis SET 에 이미 존재하는 train_no → 해당 arrival skip, 큐 0건."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    redis_key = _ARRIVAL_REDIS_KEY_TEMPLATE.format(
+        notification_id=201, kst_date=_ARRIVAL_KST_DATE
+    )
+    await redis.sadd(redis_key, "A001")
+
+    notif = _FakeNotification(
+        id=201,
+        user_id=11,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config=_ARRIVAL_NOTIF_CFG,
+    )
+    user = _FakeUser(id=11, discord_id=77777)
+    arrivals = [_make_arrival(direction="상행", seconds=200, train_no="A001")]
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_arrival_ctx(queue=queue, redis=redis)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif, user)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+        )
+
+        await run_transit_job(ctx)
+
+    assert queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# arrival 케이스 3: 윈도우 밖 skip (now_kst < start_time)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_arrival_before_window_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KST 08:00 — start_time=09:00 → 윈도우 밖 → 큐 0건, Redis 호출 없음."""
+    # KST 08:00 = UTC 전일 23:00
+    frozen_kst = "2026-05-20T08:00:00+09:00"
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    notif = _FakeNotification(
+        id=202,
+        user_id=12,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config=_ARRIVAL_NOTIF_CFG,  # start_time=09:00
+    )
+    user = _FakeUser(id=12, discord_id=66666)
+    arrivals = [_make_arrival(direction="상행", seconds=200, train_no="A001")]
+    call_count: list[int] = []
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_arrival_ctx(queue=queue, redis=redis)
+
+    with time_machine.travel(frozen_kst, tick=False):
+        with monkeypatch.context() as m:
+            m.setattr(
+                "app.notifications.transit.worker.NotificationRepository",
+                lambda session: _FakeNotificationRepo([(notif, user)]),
+            )
+            m.setattr(
+                "app.notifications.transit.worker.NotificationHistoryRepository",
+                lambda session: _FakeHistoryRepo(last_sent_at=None),
+            )
+            m.setattr(
+                "app.notifications.transit.worker.SubwayClient",
+                lambda http_client, settings: _FakeSubwayClient(arrivals, call_count),
+            )
+
+            await run_transit_job(ctx)
+
+    assert queue.qsize() == 0
+    # 윈도우 밖이므로 SubwayClient 호출 없어야 함 (Redis 키 검사 전 skip).
+    assert len(call_count) == 0
+
+
+# ---------------------------------------------------------------------------
+# arrival 케이스 4: direction 미스매치 skip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_ARRIVAL_FIXED_KST, tick=False)
+async def test_arrival_direction_mismatch_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cfg.direction='상행' 인데 arrival.direction='하행' → skip, 큐 0건."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    notif = _FakeNotification(
+        id=203,
+        user_id=13,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config=_ARRIVAL_NOTIF_CFG,  # direction=상행
+    )
+    user = _FakeUser(id=13, discord_id=55555)
+    arrivals = [_make_arrival(direction="하행", seconds=200, train_no="B001")]
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_arrival_ctx(queue=queue, redis=redis)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif, user)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+        )
+
+        await run_transit_job(ctx)
+
+    assert queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# arrival 케이스 5: effective_seconds > minutes_before*60 → skip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_ARRIVAL_FIXED_KST, tick=False)
+async def test_arrival_too_far_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+    """arrival_seconds=600 (10분) > minutes_before=5분(300초) → skip."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    notif = _FakeNotification(
+        id=204,
+        user_id=14,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config=_ARRIVAL_NOTIF_CFG,  # minutes_before=5
+    )
+    user = _FakeUser(id=14, discord_id=44444)
+    arrivals = [
+        _make_arrival(direction="상행", seconds=600, train_no="A001")  # 10분
+    ]
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_arrival_ctx(queue=queue, redis=redis)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif, user)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+        )
+
+        await run_transit_job(ctx)
+
+    assert queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# arrival 케이스 6: redis_client=None → warn 로그, 큐 0건, raise 없음
+# (별도 단독 테스트로도 확인, 케이스 5에서 이미 다루지만 명시 분리)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_ARRIVAL_FIXED_KST, tick=False)
+async def test_arrival_redis_none_skip_no_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """redis_client=None 인 경우 arrival 분기가 warn 하고 큐 0건 + 예외 없음."""
+    notif = _FakeNotification(
+        id=205,
+        user_id=15,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config=_ARRIVAL_NOTIF_CFG,
+    )
+    user = _FakeUser(id=15, discord_id=33333)
+    arrivals = [_make_arrival(direction="상행", seconds=200, train_no="A001")]
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_arrival_ctx(queue=queue, redis=None)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif, user)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+        )
+
+        # 예외 없이 정상 종료돼야 한다.
+        await run_transit_job(ctx)
+
+    assert queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# arrival 케이스 7: TTL NX 동작 — 두 번째 SADD 시 TTL 초기화 안 됨
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_ARRIVAL_FIXED_KST, tick=False)
+async def test_arrival_ttl_nx_not_reset_on_second_sadd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """같은 키에 두 번째 열차 SADD 시 EXPIRE NX → TTL 이 초기화되지 않는다.
+
+    첫 번째 SADD 후 TTL 을 임의로 설정한 뒤 두 번째 열차를 적재.
+    expire NX 이므로 TTL 이 이미 있으면 덮어 쓰지 않는다.
+    """
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    redis_key = _ARRIVAL_REDIS_KEY_TEMPLATE.format(
+        notification_id=206, kst_date=_ARRIVAL_KST_DATE
+    )
+    # 먼저 키에 짧은 TTL(100s) 설정 — 이미 발송된 이력이 있는 상황 시뮬레이션.
+    await redis.sadd(redis_key, "EXISTING")
+    await redis.expire(redis_key, 100)
+
+    notif = _FakeNotification(
+        id=206,
+        user_id=16,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config=_ARRIVAL_NOTIF_CFG,
+    )
+    user = _FakeUser(id=16, discord_id=22222)
+    arrivals = [_make_arrival(direction="상행", seconds=200, train_no="A_NEW")]
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_arrival_ctx(queue=queue, redis=redis)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif, user)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+        )
+
+        await run_transit_job(ctx)
+
+    assert queue.qsize() == 1
+
+    ttl = await redis.ttl(redis_key)
+    # EXPIRE NX 이므로 기존 100s TTL 이 유지돼야 한다 (28h=100800s 로 덮어 쓰면 안 됨).
+    assert ttl <= 100, f"TTL 이 NX 무시하고 리셋됨: {ttl}"
+    assert ttl > 0, "TTL 이 만료돼서는 안 됨"

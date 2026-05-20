@@ -3,6 +3,7 @@
 respx 로 서울 공공 API 를 모킹하고 응답 코드별 동작을 검증한다.
 """
 
+from datetime import timezone
 from unittest.mock import MagicMock
 
 import httpx
@@ -14,6 +15,7 @@ from app.crawlers.subway.client import (
     SubwayClient,
     _BASE_URL,
     _END_INDEX,
+    _parse_recptn_dt,
 )
 from app.crawlers.subway.exceptions import SubwayApiAuthFailed, SubwayApiUnavailable
 
@@ -60,6 +62,8 @@ def _sample_row(
     train_no: str = "2001",
     arvl_cd: str = "1",
     train_type: str = "일반",
+    train_line_nm: str = "",
+    recptn_dt: str = "",
 ) -> dict:  # type: ignore[type-arg]
     return {
         "subwayId": subway_id,
@@ -72,6 +76,8 @@ def _sample_row(
         "btrainNo": train_no,
         "arvlCd": arvl_cd,
         "btrainSttus": train_type,
+        "trainLineNm": train_line_nm,
+        "recptnDt": recptn_dt,
     }
 
 
@@ -247,3 +253,94 @@ async def test_fetch_arrivals_unknown_subway_id_uses_unknown_label() -> None:
 
     assert len(result) == 1
     assert result[0].line_label == "알 수 없음"
+
+
+# ---------------------------------------------------------------------------
+# 테스트: trainLineNm, recptnDt 필드 파싱
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_row_to_arrival_parses_train_line_name_and_received_at() -> None:
+    """trainLineNm, recptnDt 가 있는 row → train_line_name/received_at 올바르게 매핑."""
+    row = _sample_row(
+        train_line_nm="성수행(목적지역) - 구로디지털단지방면(다음역)",
+        recptn_dt="2024-01-15 10:03:30",
+    )
+    payload = _info_000_payload([row])
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(_station_url("강남")).mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+
+        async with httpx.AsyncClient() as client:
+            subway_client = SubwayClient(client, _make_settings())
+            result = await subway_client.fetch_arrivals("강남")
+
+    assert len(result) == 1
+    arr = result[0]
+    assert arr.train_line_name == "성수행(목적지역) - 구로디지털단지방면(다음역)"
+    assert arr.received_at is not None
+    # UTC 변환 검증: KST 10:03:30 = UTC 01:03:30
+    assert arr.received_at.tzinfo == timezone.utc
+    assert arr.received_at.hour == 1
+    assert arr.received_at.minute == 3
+    assert arr.received_at.second == 30
+
+
+@pytest.mark.asyncio
+async def test_row_to_arrival_empty_recptn_dt_gives_none_received_at() -> None:
+    """recptnDt 가 빈 문자열이면 received_at=None."""
+    row = _sample_row(recptn_dt="")
+    payload = _info_000_payload([row])
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(_station_url("강남")).mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+
+        async with httpx.AsyncClient() as client:
+            subway_client = SubwayClient(client, _make_settings())
+            result = await subway_client.fetch_arrivals("강남")
+
+    assert len(result) == 1
+    assert result[0].received_at is None
+
+
+# ---------------------------------------------------------------------------
+# 테스트: _parse_recptn_dt 단위
+# ---------------------------------------------------------------------------
+
+
+def test_parse_recptn_dt_standard_format() -> None:
+    """표준 포맷 '2024-01-15 10:03:30' → UTC aware datetime."""
+    result = _parse_recptn_dt("2024-01-15 10:03:30")
+    assert result is not None
+    assert result.tzinfo == timezone.utc
+    # KST 10:03:30 → UTC 01:03:30
+    assert result.hour == 1
+    assert result.minute == 3
+
+
+def test_parse_recptn_dt_empty_string_returns_none() -> None:
+    """빈 문자열 → None."""
+    assert _parse_recptn_dt("") is None
+
+
+def test_parse_recptn_dt_whitespace_only_returns_none() -> None:
+    """공백만 있는 문자열 → None."""
+    assert _parse_recptn_dt("   ") is None
+
+
+def test_parse_recptn_dt_invalid_format_returns_none() -> None:
+    """파싱 불가 문자열 → None."""
+    assert _parse_recptn_dt("not-a-date") is None
+
+
+def test_parse_recptn_dt_iso_format_fallback() -> None:
+    """ISO 포맷 '2024-01-15T10:03:30' 도 파싱 가능."""
+    result = _parse_recptn_dt("2024-01-15T10:03:30")
+    assert result is not None
+    assert result.tzinfo == timezone.utc
+    assert result.hour == 1

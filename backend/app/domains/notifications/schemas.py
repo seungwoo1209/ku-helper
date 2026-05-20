@@ -12,14 +12,15 @@ from app.domains.notifications.models import NotificationType
 
 
 class _TransitArrival(BaseModel):
-    """F-06 단발 도착 알림: 특정 시각에 N분 전 1회만 발송한다.
+    """F-06 단발 도착 알림: `[start_time, end_time]` 윈도우 내 도착하는 모든 열차에 대해
+    `minutes_before` 도달 시 train_no 단위로 1회씩 발송한다.
 
     `_TransitCreate` 의 `config` 필드로 wrap 되어 외부에 노출된다. 단독으로
     클라이언트가 다루지 않는다.
     """
 
     mode: Literal["arrival"] = Field(
-        description="단발 모드 식별자. 'arrival' 은 도착 N 분 전 1회 발송.",
+        description="단발 모드 식별자. 'arrival' 은 윈도우 내 열차별로 도착 N 분 전 1회 발송.",
     )
     station_name: str = Field(
         min_length=1,
@@ -33,6 +34,21 @@ class _TransitArrival(BaseModel):
         description="호선 한글 표기. '4호선', '경의중앙선' 등.",
         examples=["4호선"],
     )
+    direction: Literal["상행", "하행", "내선", "외선"] = Field(
+        description=(
+            "방향. 공공 API `updnLine` 과 동일 값. 1·3·4호선 등은 '상행'/'하행', "
+            "2·5호선 등 순환선은 '내선'/'외선'."
+        ),
+        examples=["상행"],
+    )
+    start_time: time = Field(
+        description="윈도우 시작 시각 (24h 'HH:MM' 또는 'HH:MM:SS'). 서버 로컬 KST.",
+        examples=["08:00:00"],
+    )
+    end_time: time = Field(
+        description="윈도우 종료 시각. `start_time` 보다 늦어야 한다 (validator).",
+        examples=["10:00:00"],
+    )
     minutes_before: int = Field(
         ge=1,
         le=120,
@@ -43,6 +59,16 @@ class _TransitArrival(BaseModel):
         default=True,
         description="혼잡도 정보 포함 여부. 공공 API 가 제공할 때만 유효.",
     )
+
+    @model_validator(mode="after")
+    def _start_before_end(self) -> "_TransitArrival":
+        if self.start_time >= self.end_time:
+            raise ValueError(
+                "start_time must be earlier than end_time "
+                "(midnight-crossing windows like 23:00 -> 01:00 are not supported; "
+                "split into two notifications)"
+            )
+        return self
 
 
 class _TransitRecurring(BaseModel):
@@ -88,7 +114,11 @@ class _TransitRecurring(BaseModel):
     @model_validator(mode="after")
     def _start_before_end(self) -> "_TransitRecurring":
         if self.start_time >= self.end_time:
-            raise ValueError("start_time must be earlier than end_time")
+            raise ValueError(
+                "start_time must be earlier than end_time "
+                "(midnight-crossing windows like 23:00 -> 01:00 are not supported; "
+                "split into two notifications)"
+            )
         return self
 
 
@@ -198,6 +228,9 @@ class _TransitCreate(BaseModel):
                         "mode": "arrival",
                         "station_name": "성신여대입구",
                         "line": "4호선",
+                        "direction": "상행",
+                        "start_time": "08:00:00",
+                        "end_time": "10:00:00",
                         "minutes_before": 10,
                         "include_congestion": True,
                     },
@@ -398,6 +431,9 @@ class _TransitRead(BaseModel):
                         "mode": "arrival",
                         "station_name": "성신여대입구",
                         "line": "4호선",
+                        "direction": "상행",
+                        "start_time": "08:00:00",
+                        "end_time": "10:00:00",
                         "minutes_before": 10,
                         "include_congestion": True,
                     },

@@ -5,7 +5,9 @@ Redis TTL 캐시는 §C-1(Redis 도입) 이후 추가한다.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import httpx
 import structlog
@@ -45,6 +47,15 @@ _HTTP_TIMEOUT_SECONDS = 10.0
 # URL 로그 출력 시 API key 자리를 대체하는 자리표시자.
 _KEY_PLACEHOLDER = "<API_KEY>"
 
+# recptnDt 파싱을 시도할 포맷 목록. 먼저 일치하는 항목이 사용된다.
+_RECPTN_DT_FORMATS: list[str] = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y/%m/%d %H:%M:%S",
+]
+
+_KST = ZoneInfo("Asia/Seoul")
+
 
 @dataclass(frozen=True)
 class SubwayArrival:
@@ -61,6 +72,10 @@ class SubwayArrival:
     train_no: str
     arvl_code: int
     train_type: str
+    # trainLineNm: 도착지 방면 전체 문자열 (예: "성수행(목적지역) - 구로디지털단지방면(다음역)")
+    train_line_name: str
+    # recptnDt: KST naive → aware → UTC aware 변환. 파싱 실패 시 None.
+    received_at: datetime | None
 
 
 class SubwayClient:
@@ -171,4 +186,27 @@ class SubwayClient:
             train_no=str(row.get("btrainNo", "")),
             arvl_code=int(str(row.get("arvlCd", "99"))),
             train_type=str(row.get("btrainSttus", "")),
+            train_line_name=str(row.get("trainLineNm", "")),
+            received_at=_parse_recptn_dt(str(row.get("recptnDt", ""))),
         )
+
+
+def _parse_recptn_dt(raw: str) -> datetime | None:
+    """KST naive 문자열 → UTC aware datetime.
+
+    API 가 반환하는 `recptnDt` 는 KST naive 문자열이다.
+    _RECPTN_DT_FORMATS 를 순서대로 시도하고, 성공한 첫 포맷을 사용한다.
+    파싱에 모두 실패하거나 빈 문자열이면 None 을 반환한다.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+    for fmt in _RECPTN_DT_FORMATS:
+        try:
+            naive = datetime.strptime(raw, fmt)
+            kst_aware = naive.replace(tzinfo=_KST)
+            return kst_aware.astimezone(timezone.utc)
+        except ValueError:
+            continue
+    _logger.warning("recptn_dt_parse_failed", raw=raw[:30])
+    return None

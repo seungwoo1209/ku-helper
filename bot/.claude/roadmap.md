@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-21 — LIBRARY 종단 완료. 스케줄 알림(F-13 임계값 / F-14 Redis 상태머신 중복방지 / F-15 긴급) + 즉시 발송(`POST /api/v1/me/immediate-send/library` ↔ `run_immediate_send_library_job`) 양쪽 가동. 이로써 TRANSIT/LUNCH/LIBRARY 3종 즉시 발송 + 교통(F-07)·도서관 정기 알림 운영. **Redis 가 F-14 용으로 신규 도입**(`JobContext.redis_client` 배선). §D 완료.
+마지막 갱신: 2026-05-21 — F-06 TRANSIT 단발 도착 알림 종단 완료. 백엔드 `_TransitArrival` 에 `direction Literal["상행","하행","내선","외선"]` + `start_time`/`end_time` 윈도우 추가(커밋 `dcb5ab2`). 봇 `run_transit_job` 의 `mode == "arrival"` 분기 신설(`_process_arrival_subscription` helper): 윈도우 안에서 line/direction 매칭 + `effective_seconds ≤ minutes_before*60` 인 모든 열차를 train_no 단위로 1회씩 발송. Redis SET `transit_arrival_sent:{notification_id}:{kst_date}` TTL 28h 로 train_no 중복 방지. `build_transit_arrival_embed` 신규(헬퍼는 recurring 빌더와 공용). 테스트 118 → 129 (+11). 이전: TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
 
 ## 진행 상황 스냅샷
 
@@ -89,10 +89,19 @@
 - Redis TTL 캐시(키 `subway:{station}:{line}`, TTL 30초)는 **미적용** — §C-1 Redis 도입 후 추가.
 - API 키는 `Settings.subway_api_key: SecretStr` 로 격리. URL 로그 출력 시 마스킹.
 
-### B-2. Transit Worker — 완료 (커밋 `6703ded` + 버그 수정 `18668ce`)
+### B-2. Transit Worker — 부분 완료 (커밋 `6703ded` + 버그 수정 `18668ce` + 임베드 고도화 `c9e4985`)
 - `app/notifications/transit/worker.py`: 활성 구독 → SubwayClient 결과 → `build_transit_recurring_embed` → Sender 큐 적재.
-- 현재 **F-07 (recurring) 만** 구현. F-06 (arrival) 은 후속 PR.
+- 현재 **F-07 (recurring) 만** 구현. **F-06 (arrival) 은 미구현** — `mode != "recurring"` 분기에서 skip. 후속 §B-2a 에서 다룬다.
 - 윈도우 비교 KST 고정 (`Asia/Seoul`). interval 가드는 history 마지막 SUCCESS row + 메모리 in-flight set 이중.
+- 임베드 고도화 (커밋 `c9e4985`): `SubwayArrival` 에 `train_line_name`/`received_at` 필드 추가. field name = `{arvlCd 라벨} · {보정 분}분 후` (API §4.2 1:1 매핑). value = `{train_line_name or direction→headed_for}` + `[train_type]`. payload 에 `train_line_name`/`received_at`/`effective_seconds` 키 추가. 정기·즉시발송 양쪽에 자동 반영.
+
+### B-2a. F-06 단발 도착 알림 — 완료 (백엔드 `dcb5ab2` + 봇 본 PR)
+- 백엔드 `_TransitArrival` 확장: `direction Literal["상행","하행","내선","외선"]` + `start_time`/`end_time` 추가 + `_start_before_end` validator. 회귀 가드 8건 (전 4 direction + invalid direction 거절 + start>=end 거절 + minutes_before 누락 등).
+- 봇 `run_transit_job` 에 `mode == "arrival"` 분기 + `_process_arrival_subscription` helper.
+- 매 틱: 윈도우 진입 시 Redis SET 키 `transit_arrival_sent:{notification_id}:{kst_date}` SMEMBERS → API 도착 목록 filter(line/direction/`effective_seconds ≤ minutes_before*60`/`train_no ∉ sent_set`) → 통과한 모든 열차에 대해 SADD + EXPIRE NX(28h) + 큐 적재. `ctx.in_flight_notification_ids` 미사용(같은 notification 의 서로 다른 train_no 가 동일 틱에 잡힐 수 있어야 정상).
+- `ctx.redis_client is None` 이면 arrival 분기 skip + warn 로그(recurring 분기는 영향 X) — LIBRARY 와 동일 패턴.
+- `build_transit_arrival_embed` 신규: 제목 `⏰ {station} {line} {direction} 도착 임박`, description `{N}분 전 알림`, 1 필드(`_format_minutes_label` + `_build_field_value` 재사용). payload 에 `train_no`/`direction`/`minutes_before` 포함.
+- 알려진 부채: direction 매칭이 API `updnLine` raw 문자열 비교라 공공 API 표기 변경 시 silent fail. 호선별 매핑 테이블은 의도적으로 추가하지 않음(KISS) — 백엔드 Literal 과 raw 가 분기되는 시점에 재검토.
 
 ### B-3. APScheduler 잡 등록 — 완료 (커밋 `d189b32` + `6703ded`)
 - `register_jobs` 가 `run_transit_job`/`run_lunch_job`/`run_library_job` 을 모두 등록 — TRANSIT/LIBRARY 5초, LUNCH 60초 `IntervalTrigger`. 잡 옵션 `max_instances=1`, `coalesce=True`, `misfire_grace_time=5`.
@@ -102,6 +111,7 @@
 
 ### B-4. F-08 혼잡도·지연 정보 (우선순위: 중)
 - 임베드 필드에 혼잡도(여유/보통/혼잡) + 지연 사유·예상 지연 시간 포함.
+- 부분 진척 (커밋 `c9e4985`): API `arvlCd`(진입/도착/출발/운행중) 가 임베드 field name 라벨로 노출됨. 정식 혼잡도(여유/보통/혼잡) 데이터 소스는 미상 — 별도 조사 필요. 지연 사유는 공공 API `arvlMsg3` 가 일부 케이스에 제공하지만 현재 미사용.
 
 ## §C. 점심 알림 — 즉시 발송 종단 우선
 
@@ -183,9 +193,9 @@
 
 ## 권장 순서
 
-**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (완료) → TRANSIT 즉시 발송 (완료) → §D (완료, LIBRARY 정기+즉시발송) → §B(F-06) → §C-4 → §E → §F → §G**
+**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (완료) → TRANSIT 즉시 발송 (완료) → §D (완료, LIBRARY 정기+즉시발송) → §B-2a (F-06 arrival, 완료) → §C-4 → §E → §F → §G**
 
-남은 우선 작업: §E(F-22 관리자 알림), §B-4(F-08 혼잡도), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(Dockerfile·CI·health check), subway/lunch Redis 캐시 이전.
+남은 우선 작업: §E(F-22 관리자 알림), §B-4(F-08 혼잡도 — arvlCd 라벨은 부분 완료), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(Dockerfile·CI·health check), subway/lunch Redis 캐시 이전.
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 
