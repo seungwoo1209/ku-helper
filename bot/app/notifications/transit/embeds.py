@@ -13,6 +13,7 @@ import discord
 from app.crawlers.subway.client import SubwayArrival
 
 _EMBED_TITLE_TEMPLATE = "🚇 {station_name} {line} 도착 정보"
+_ARRIVAL_EMBED_TITLE_TEMPLATE = "⏰ {station_name} {line} {direction} 도착 임박"
 _EMPTY_DESCRIPTION = "현재 도착 예정 열차가 없습니다."
 _MAX_ARRIVALS_PER_DIRECTION = 2
 
@@ -72,6 +73,55 @@ def build_transit_recurring_embed(
             embed.add_field(name=field_name, value=field_value, inline=False)
 
     payload = _build_payload(station_name, line, selected, now)
+    return embed, payload
+
+
+def build_transit_arrival_embed(
+    station_name: str,
+    line: str,
+    direction: str,
+    minutes_before: int,
+    arrival: SubwayArrival,
+    now: datetime,
+) -> tuple[discord.Embed, dict[str, Any]]:
+    """F-06 단발 도착 알림용 임베드와 payload dict 를 반환한다.
+
+    특정 열차 1건의 도착 임박 알림. train_no 단위로 1회 발송된다.
+    """
+    title = _ARRIVAL_EMBED_TITLE_TEMPLATE.format(
+        station_name=station_name,
+        line=line,
+        direction=direction,
+    )
+    embed = discord.Embed(
+        title=title,
+        color=discord.Color.blurple(),
+        timestamp=now,
+    )
+    embed.description = f"{minutes_before}분 전 알림"
+
+    eff = _effective_seconds(arrival, now)
+    label = _ARVL_CODE_LABEL.get(arrival.arvl_code, "운행중")
+    minutes_label = _format_minutes_label(eff)
+    field_name = f"{label} · {minutes_label}" if minutes_label else label
+    field_value = _build_field_value(arrival)
+    embed.add_field(name=field_name, value=field_value, inline=False)
+
+    payload: dict[str, Any] = {
+        "station_name": station_name,
+        "line": line,
+        "direction": direction,
+        "minutes_before": minutes_before,
+        "train_no": arrival.train_no,
+        "headed_for": arrival.headed_for,
+        "arrival_seconds": arrival.arrival_seconds,
+        "arvl_code": arrival.arvl_code,
+        "train_type": arrival.train_type,
+        "train_line_name": arrival.train_line_name,
+        "received_at": arrival.received_at.isoformat() if arrival.received_at else None,
+        "effective_seconds": eff,
+        "rendered_at": now.isoformat(),
+    }
     return embed, payload
 
 

@@ -4,7 +4,7 @@
 현재 봇 컨테이너 작업이 우선이라 잠시 보류 중이지만, 백엔드 PR을 다시 시작할 때
 **여기서부터 읽어서 컨텍스트를 복구**할 것.
 
-마지막 갱신: 2026-05-21 (`POST /api/v1/me/immediate-send/library` 추가 — LUNCH/TRANSIT/LIBRARY 3종 즉시 발송 운영. notifications `LibraryConfig.reading_room_id` 는 논리 열람실 번호 Literal[0,1,2,3,5](0=전체 합산, 4 미운영)로 확정. §D-5 갱신).
+마지막 갱신: 2026-05-21 — F-06 TRANSIT 단발 알림 스키마 확장(커밋 `dcb5ab2`). `_TransitArrival` 에 `direction: Literal["상행","하행","내선","외선"]` + `start_time`/`end_time` 윈도우 + `_start_before_end` validator 추가. 봇 측 종단(arrival 분기 + Redis SET train_no 중복 방지)도 같은 PR 에서 완료. 이전: `POST /api/v1/me/immediate-send/library` 추가, `LibraryConfig.reading_room_id` Literal[0,1,2,3,5] 로 확정.
 
 ## 진행 상황 스냅샷
 

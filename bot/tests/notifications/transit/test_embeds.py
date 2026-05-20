@@ -9,10 +9,12 @@ from datetime import datetime, timedelta, timezone
 from app.crawlers.subway.client import SubwayArrival
 from app.notifications.transit.embeds import (
     _ARVL_CODE_LABEL,
+    _ARRIVAL_EMBED_TITLE_TEMPLATE,
     _EMPTY_DESCRIPTION,
     _EMBED_TITLE_TEMPLATE,
     _effective_seconds,
     _format_minutes_label,
+    build_transit_arrival_embed,
     build_transit_recurring_embed,
 )
 
@@ -426,3 +428,120 @@ def test_format_minutes_label_any_positive_no_arvl_code_branch() -> None:
     assert _format_minutes_label(1) == "1분 후"
     assert _format_minutes_label(59) == "1분 후"
     assert _format_minutes_label(180) == "3분 후"
+
+
+# ===========================================================================
+# build_transit_arrival_embed 테스트 (F-06)
+# ===========================================================================
+
+
+def _make_arrival_single(
+    direction: str = "상행",
+    arrival_seconds: int = 120,
+    arvl_code: int = 1,
+    train_no: str = "A001",
+    received_at: datetime | None = None,
+) -> SubwayArrival:
+    return SubwayArrival(
+        station_name="강남",
+        subway_id="1002",
+        line_label="2호선",
+        direction=direction,
+        headed_for="성수",
+        arrival_message="도착",
+        arrival_message_detail="강남 도착",
+        arrival_seconds=arrival_seconds,
+        train_no=train_no,
+        arvl_code=arvl_code,
+        train_type="일반",
+        train_line_name="성수행(목적지역) - 구로디지털단지방면(다음역)",
+        received_at=received_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# arrival embed 테스트 1: 제목 포맷 회귀 (분/역/방향 포함)
+# ---------------------------------------------------------------------------
+
+
+def test_arrival_embed_title_format() -> None:
+    """build_transit_arrival_embed 제목이 역명·호선·방향을 포함한다."""
+    arr = _make_arrival_single()
+    embed, _ = build_transit_arrival_embed(
+        station_name="강남",
+        line="2호선",
+        direction="상행",
+        minutes_before=5,
+        arrival=arr,
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    expected_title = _ARRIVAL_EMBED_TITLE_TEMPLATE.format(
+        station_name="강남", line="2호선", direction="상행"
+    )
+    assert d["title"] == expected_title
+
+
+# ---------------------------------------------------------------------------
+# arrival embed 테스트 2: description 에 "{minutes_before}분 전 알림"
+# ---------------------------------------------------------------------------
+
+
+def test_arrival_embed_description_contains_minutes_before() -> None:
+    """description 이 'N분 전 알림' 형태를 포함한다."""
+    arr = _make_arrival_single()
+    embed, _ = build_transit_arrival_embed(
+        station_name="강남",
+        line="2호선",
+        direction="상행",
+        minutes_before=3,
+        arrival=arr,
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    assert d.get("description") == "3분 전 알림"
+
+
+# ---------------------------------------------------------------------------
+# arrival embed 테스트 3: payload 에 train_no, direction, minutes_before 키 존재
+# ---------------------------------------------------------------------------
+
+
+def test_arrival_embed_payload_contains_required_keys() -> None:
+    """payload 에 train_no, direction, minutes_before 키가 있다."""
+    arr = _make_arrival_single(train_no="T999")
+    _, payload = build_transit_arrival_embed(
+        station_name="강남",
+        line="2호선",
+        direction="상행",
+        minutes_before=7,
+        arrival=arr,
+        now=_NOW,
+    )
+    assert payload["train_no"] == "T999"
+    assert payload["direction"] == "상행"
+    assert payload["minutes_before"] == 7
+
+
+# ---------------------------------------------------------------------------
+# arrival embed 테스트 4: effective_seconds ≤ 0 → field name 이 라벨만 (분 표시 없음)
+# ---------------------------------------------------------------------------
+
+
+def test_arrival_embed_field_name_label_only_when_effective_zero() -> None:
+    """effective_seconds=0 → field name 이 '·' 없이 arvlCd 라벨만."""
+    arr = _make_arrival_single(arrival_seconds=0, arvl_code=2)
+    embed, _ = build_transit_arrival_embed(
+        station_name="강남",
+        line="2호선",
+        direction="상행",
+        minutes_before=5,
+        arrival=arr,
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    # arvl_code=2 → "출발". 분 표시 없으므로 "·" 없어야 한다.
+    assert fields[0]["name"] == "출발"
+    assert "·" not in fields[0]["name"]
