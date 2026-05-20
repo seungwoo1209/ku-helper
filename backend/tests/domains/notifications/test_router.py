@@ -24,7 +24,7 @@ async def test_list_empty(authed_client: tuple[AsyncClient, User]) -> None:
 
 @pytest.mark.asyncio
 async def test_create_transit_arrival(authed_client: tuple[AsyncClient, User]) -> None:
-    """F-06: mode=arrival + minutes_before."""
+    """F-06: mode=arrival + 윈도우 + direction + minutes_before."""
     client, user = authed_client
     response = await client.post(
         _BASE,
@@ -34,6 +34,9 @@ async def test_create_transit_arrival(authed_client: tuple[AsyncClient, User]) -
                 "mode": "arrival",
                 "station_name": "건대입구",
                 "line": "2",
+                "direction": "내선",
+                "start_time": "08:00:00",
+                "end_time": "10:00:00",
                 "minutes_before": 10,
             },
         },
@@ -43,7 +46,83 @@ async def test_create_transit_arrival(authed_client: tuple[AsyncClient, User]) -
     assert body["type"] == "TRANSIT"
     assert body["user_id"] == user.id
     assert body["config"]["mode"] == "arrival"
+    assert body["config"]["direction"] == "내선"
     assert body["config"]["minutes_before"] == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", ["상행", "하행", "내선", "외선"])
+async def test_create_transit_arrival_accepts_all_directions(
+    authed_client: tuple[AsyncClient, User],
+    direction: str,
+) -> None:
+    """F-06: direction Literal 4값 모두 허용."""
+    client, _ = authed_client
+    response = await client.post(
+        _BASE,
+        json={
+            "type": "TRANSIT",
+            "config": {
+                "mode": "arrival",
+                "station_name": "건대입구",
+                "line": "2",
+                "direction": direction,
+                "start_time": "08:00:00",
+                "end_time": "10:00:00",
+                "minutes_before": 10,
+            },
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["config"]["direction"] == direction
+
+
+@pytest.mark.asyncio
+async def test_create_transit_arrival_rejects_invalid_direction(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """F-06: Literal 외 direction 값은 422."""
+    client, _ = authed_client
+    response = await client.post(
+        _BASE,
+        json={
+            "type": "TRANSIT",
+            "config": {
+                "mode": "arrival",
+                "station_name": "건대입구",
+                "line": "2",
+                "direction": "역방향",
+                "start_time": "08:00:00",
+                "end_time": "10:00:00",
+                "minutes_before": 10,
+            },
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_transit_arrival_rejects_end_before_start(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """F-06: start_time >= end_time 거절."""
+    client, _ = authed_client
+    response = await client.post(
+        _BASE,
+        json={
+            "type": "TRANSIT",
+            "config": {
+                "mode": "arrival",
+                "station_name": "건대입구",
+                "line": "2",
+                "direction": "내선",
+                "start_time": "10:00:00",
+                "end_time": "08:00:00",
+                "minutes_before": 10,
+            },
+        },
+    )
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -107,6 +186,9 @@ async def test_create_transit_arrival_missing_minutes_before(
                 "mode": "arrival",
                 "station_name": "건대입구",
                 "line": "2",
+                "direction": "내선",
+                "start_time": "08:00:00",
+                "end_time": "10:00:00",
             },
         },
     )
