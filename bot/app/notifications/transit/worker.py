@@ -206,11 +206,20 @@ async def run_transit_job(ctx: JobContext) -> None:
 async def _smembers_str(redis: "Redis", key: str) -> set[str]:
     """Redis SMEMBERS 를 호출하여 str set 으로 반환한다.
 
-    redis-py async 는 sync/async overload 라 mypy 가 Awaitable union 을 본다.
-    decode_responses=True 환경에서 실제 반환은 set[str].
+    redis-py async stub 은 sync/async overload 라 mypy 가 Awaitable union 을 본다.
+    decode_responses=True 환경에서 실제 반환은 set[str] 이지만, 그렇지 않은 환경
+    대비를 위해 bytes 도 decode. 그 외 타입은 str() 폴백.
     """
-    raw = await cast("Awaitable[set[bytes | str]]", redis.smembers(key))
-    return {v if isinstance(v, str) else v.decode() for v in raw}
+    raw = await cast("Awaitable[set[Any]]", redis.smembers(key))
+    result: set[str] = set()
+    for v in raw:
+        if isinstance(v, str):
+            result.add(v)
+        elif isinstance(v, bytes):
+            result.add(v.decode())
+        else:
+            result.add(str(v))
+    return result
 
 
 async def _process_arrival_subscription(
