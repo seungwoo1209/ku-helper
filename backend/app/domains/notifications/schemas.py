@@ -63,7 +63,11 @@ class _TransitArrival(BaseModel):
     @model_validator(mode="after")
     def _start_before_end(self) -> "_TransitArrival":
         if self.start_time >= self.end_time:
-            raise ValueError("start_time must be earlier than end_time")
+            raise ValueError(
+                "start_time must be earlier than end_time "
+                "(midnight-crossing windows like 23:00 -> 01:00 are not supported; "
+                "split into two notifications)"
+            )
         return self
 
 
@@ -110,7 +114,11 @@ class _TransitRecurring(BaseModel):
     @model_validator(mode="after")
     def _start_before_end(self) -> "_TransitRecurring":
         if self.start_time >= self.end_time:
-            raise ValueError("start_time must be earlier than end_time")
+            raise ValueError(
+                "start_time must be earlier than end_time "
+                "(midnight-crossing windows like 23:00 -> 01:00 are not supported; "
+                "split into two notifications)"
+            )
         return self
 
 
