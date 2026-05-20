@@ -54,6 +54,7 @@ def register_jobs(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+        args=[ctx],
     )
     scheduler.add_job(
         run_immediate_send_lunch_job,
