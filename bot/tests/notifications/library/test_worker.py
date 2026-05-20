@@ -16,7 +16,12 @@ from app.crawlers.library.client import RoomSeats
 from app.crawlers.library.exceptions import LibraryCrawlerFailed
 from app.db.models import NotificationType
 from app.notifications.library import worker as worker_module
-from app.notifications.library.worker import _state_key, run_library_job
+from app.notifications.library.worker import (
+    _state_key,
+    run_immediate_send_library_job,
+    run_library_job,
+)
+from app.notifications.lunch.repository import ImmediateSendRequestRow
 from app.scheduler.context import JobContext
 
 
@@ -40,6 +45,9 @@ class _FakeSession:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
+        pass
+
+    async def commit(self) -> None:
         pass
 
 
@@ -216,5 +224,110 @@ async def test_crawler_failure_is_swallowed(
     ctx = _ctx(redis)
 
     await run_library_job(ctx)
+
+    assert ctx.queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# 즉시 발송 (run_immediate_send_library_job)
+# ---------------------------------------------------------------------------
+
+
+def _patch_immediate_repo(
+    monkeypatch: pytest.MonkeyPatch, rows: list[ImmediateSendRequestRow]
+) -> None:
+    class _Repo:
+        def __init__(self, session: Any) -> None:
+            pass
+
+        async def list_pending(
+            self, type_: NotificationType, limit: int = 50
+        ) -> list[ImmediateSendRequestRow]:
+            return rows
+
+    monkeypatch.setattr(worker_module, "ImmediateSendRequestRepository", _Repo)
+
+
+def _patch_history(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+
+    class _Hist:
+        def __init__(self, session: Any) -> None:
+            pass
+
+        async def insert_result(self, **kwargs: Any) -> None:
+            calls.append(kwargs)
+
+    monkeypatch.setattr(worker_module, "NotificationHistoryRepository", _Hist)
+    return calls
+
+
+def _pending_row(
+    payload: dict[str, Any], request_id: int = 5
+) -> ImmediateSendRequestRow:
+    return ImmediateSendRequestRow(
+        id=request_id, user_id=42, discord_id=999, payload=payload
+    )
+
+
+@pytest.mark.asyncio
+async def test_immediate_pending_row_queues(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_immediate_repo(monkeypatch, [_pending_row({"reading_room_id": 1})])
+    _patch_client(monkeypatch, {1: _room(1, available=50)})
+    _patch_history(monkeypatch)
+    ctx = _ctx(None)
+
+    await run_immediate_send_library_job(ctx)
+
+    assert ctx.queue.qsize() == 1
+    task = ctx.queue.get_nowait()
+    assert task.immediate_send_request_id == 5
+    assert task.notification_id is None
+
+
+@pytest.mark.asyncio
+async def test_immediate_room_absent_inserts_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """요청 열람실이 현재 응답에 없으면 FAILED history INSERT + 큐 0건."""
+    _patch_immediate_repo(monkeypatch, [_pending_row({"reading_room_id": 2})])
+    _patch_client(monkeypatch, {1: _room(1, available=50)})
+    calls = _patch_history(monkeypatch)
+    ctx = _ctx(None)
+
+    await run_immediate_send_library_job(ctx)
+
+    assert ctx.queue.qsize() == 0
+    assert len(calls) == 1
+    assert calls[0]["failure_reason"] == "room_absent"
+
+
+@pytest.mark.asyncio
+async def test_immediate_crawler_failure_inserts_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_immediate_repo(monkeypatch, [_pending_row({"reading_room_id": 1})])
+    _patch_client(monkeypatch, {}, raises=LibraryCrawlerFailed("boom"))
+    calls = _patch_history(monkeypatch)
+    ctx = _ctx(None)
+
+    await run_immediate_send_library_job(ctx)
+
+    assert ctx.queue.qsize() == 0
+    assert len(calls) == 1
+    assert calls[0]["failure_reason"] == "LIBRARY_CRAWLER_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_immediate_inflight_skips_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_immediate_repo(monkeypatch, [_pending_row({"reading_room_id": 1})])
+    _patch_client(monkeypatch, {1: _room(1, available=50)})
+    _patch_history(monkeypatch)
+    ctx = _ctx(None)
+    ctx.immediate_send_inflight.add(5)
+
+    await run_immediate_send_library_job(ctx)
 
     assert ctx.queue.qsize() == 0

@@ -59,3 +59,32 @@ def build_library_embed(
         "rendered_at": now.isoformat(),
     }
     return embed, payload
+
+
+def build_library_immediate_embed(
+    room: RoomSeats,
+    now: datetime,
+) -> tuple[discord.Embed, dict[str, Any]]:
+    """즉시 발송용 현재 좌석 임베드와 history payload 를 반환한다.
+
+    1회성 스냅샷이라 임계값/긴급 개념이 없다 — 현재 잔여/총 좌석만 보여 준다.
+    """
+    embed = discord.Embed(
+        title=f"📚 {room.label} 현재 좌석",
+        color=discord.Color.blurple(),
+        timestamp=now,
+    )
+    embed.add_field(
+        name="잔여 / 총 좌석",
+        value=f"{room.available} / {room.total}",
+        inline=True,
+    )
+
+    payload: dict[str, Any] = {
+        "room_number": room.room_number,
+        "label": room.label,
+        "available": room.available,
+        "total": room.total,
+        "rendered_at": now.isoformat(),
+    }
+    return embed, payload

@@ -16,8 +16,13 @@ import structlog
 from app.core.exceptions import BotException
 from app.crawlers.library.client import LibraryClient
 from app.crawlers.library.exceptions import LibraryCrawlerFailed
-from app.db.models import NotificationType
-from app.notifications.library.embeds import build_library_embed
+from app.db.models import NotificationDeliveryStatus, NotificationType
+from app.notifications.history_repository import NotificationHistoryRepository
+from app.notifications.library.embeds import (
+    build_library_embed,
+    build_library_immediate_embed,
+)
+from app.notifications.lunch.repository import ImmediateSendRequestRepository
 from app.notifications.repository import NotificationRepository
 from app.notifications.sender import SendDmTask
 from app.scheduler.context import JobContext
@@ -31,6 +36,8 @@ _STATE_ABOVE = "above"
 _STATE_BELOW = "below"
 # F-14 상태 키 TTL(초). 시간 리셋이 아니라 상태머신이라 충분히 길게 둔다(24h).
 _STATE_TTL_SECONDS = 86400
+# 즉시 발송 폴링 시 한 틱에 픽업할 최대 row 수.
+_POLL_LIMIT = 50
 
 
 def _state_key(user_id: int, room_id: int) -> str:
@@ -137,6 +144,84 @@ async def run_library_job(ctx: JobContext) -> None:
     except (LibraryCrawlerFailed, BotException) as exc:
         # crawler/도메인 예외는 swallow + 로그. 다음 틱 재시도(F-22 카운터는 후속).
         _logger.warning("library_poll_failed", code=exc.code)
+
+
+async def run_immediate_send_library_job(ctx: JobContext) -> None:
+    """immediate_send_requests (type=LIBRARY) 폴링 → 현재 좌석 조회 → Sender 큐 적재.
+
+    아키텍처 예외: crawler 실패·열람실 부재 시 워커가 직접 NotificationHistoryRepository
+    .insert_result(status=FAILED) 를 호출한다. embed/payload 가 없어 SendDmTask 를 만들 수
+    없으면 history row 없이 LEFT JOIN 가드가 풀리지 않아 매 틱 재시도되기 때문(lunch/transit
+    즉시 발송과 동일). Redis 는 쓰지 않는다 — 즉시 발송엔 상태머신이 없다.
+    """
+    now = datetime.now(tz=timezone.utc)
+
+    try:
+        client = LibraryClient(ctx.http_client, ctx.settings)
+
+        async with ctx.session_maker() as session:
+            repo = ImmediateSendRequestRepository(session)
+            rows = await repo.list_pending(NotificationType.LIBRARY, limit=_POLL_LIMIT)
+
+        if not rows:
+            return
+        _logger.info("immediate_send_library_tick", count=len(rows))
+
+        for row in rows:
+            if row.id in ctx.immediate_send_inflight:
+                continue
+            ctx.immediate_send_inflight.add(row.id)
+
+            room_id = _coerce_optional_int(row.payload.get("reading_room_id"))
+
+            try:
+                snapshot = await client.fetch_seats()
+            except (LibraryCrawlerFailed, BotException) as exc:
+                await _insert_immediate_failure(ctx, row.id, row.user_id, exc.code)
+                ctx.immediate_send_inflight.discard(row.id)
+                continue
+
+            room = snapshot.get(room_id) if room_id is not None else None
+            if room is None:
+                await _insert_immediate_failure(ctx, row.id, row.user_id, "room_absent")
+                ctx.immediate_send_inflight.discard(row.id)
+                continue
+
+            embed, payload = build_library_immediate_embed(room, now)
+            await ctx.queue.put(
+                SendDmTask(
+                    notification_id=None,
+                    user_id=row.user_id,
+                    discord_id=row.discord_id,
+                    embed=embed,
+                    payload=payload,
+                    immediate_send_request_id=row.id,
+                )
+            )
+            _logger.info(
+                "immediate_send_library_queued",
+                request_id=row.id,
+                user_id=row.user_id,
+                room_id=room_id,
+            )
+    except BotException as exc:
+        _logger.exception("immediate_send_library_failed", code=exc.code)
+
+
+async def _insert_immediate_failure(
+    ctx: JobContext, request_id: int, user_id: int, reason: str
+) -> None:
+    async with ctx.session_maker() as session:
+        history = NotificationHistoryRepository(session)
+        await history.insert_result(
+            notification_id=None,
+            immediate_send_request_id=request_id,
+            user_id=user_id,
+            status=NotificationDeliveryStatus.FAILED,
+            payload={"reason": reason},
+            failure_reason=reason[:200],
+        )
+        await session.commit()
 
 
 def _coerce_optional_int(value: object) -> int | None:

@@ -22,6 +22,7 @@ _EXPECTED_INTERVAL_SECONDS = {
     "library_poll": LIBRARY_TICK_SECONDS,
     "immediate_send_lunch_poll": IMMEDIATE_SEND_TICK_SECONDS,
     "immediate_send_transit_poll": IMMEDIATE_SEND_TICK_SECONDS,
+    "immediate_send_library_poll": IMMEDIATE_SEND_TICK_SECONDS,
 }
 
 
@@ -83,4 +84,18 @@ def test_immediate_send_transit_poll_registered_with_ctx(job_ctx: JobContext) ->
     assert isinstance(job.trigger, IntervalTrigger)
     assert job.trigger.interval.total_seconds() == IMMEDIATE_SEND_TICK_SECONDS
     # args 에 ctx 가 포함되어야 한다.
+    assert job_ctx in job.args
+
+
+def test_immediate_send_library_poll_registered_with_ctx(job_ctx: JobContext) -> None:
+    """immediate_send_library_poll 잡이 5초 인터벌 + args=[ctx] 로 등록되어야 한다."""
+    scheduler = AsyncIOScheduler()
+    register_jobs(scheduler, job_ctx)
+
+    job = next(
+        (j for j in scheduler.get_jobs() if j.id == "immediate_send_library_poll"), None
+    )
+    assert job is not None, "immediate_send_library_poll 잡이 등록되지 않음"
+    assert isinstance(job.trigger, IntervalTrigger)
+    assert job.trigger.interval.total_seconds() == IMMEDIATE_SEND_TICK_SECONDS
     assert job_ctx in job.args
