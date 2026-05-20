@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # 건국대 학식 페이지 URL. LunchClient 가 Playwright 로 크롤링.
     cafeteria_url: str = "https://www.konkuk.ac.kr/general/18211/subview.do"
 
+    # §D 도서관 좌석 API. example-response.json 형태의 JSON 을 반환하는 엔드포인트.
+    # 미설정 시 LibraryClient 가 즉시 LibraryCrawlerFailed 를 던지고 library worker 는 skip.
+    library_seat_url: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

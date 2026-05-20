@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-20 — TRANSIT 즉시 발송 종단 추가 (`POST /api/v1/me/immediate-send/transit` ↔ `run_immediate_send_transit_job`). lunch + transit 두 종 즉시 발송 정식 운영. backend §D-5 / bot §D-5 모두 "정식 on-demand 채널" 로 승격.
+마지막 갱신: 2026-05-21 — LIBRARY 종단 완료. 스케줄 알림(F-13 임계값 / F-14 Redis 상태머신 중복방지 / F-15 긴급) + 즉시 발송(`POST /api/v1/me/immediate-send/library` ↔ `run_immediate_send_library_job`) 양쪽 가동. 이로써 TRANSIT/LUNCH/LIBRARY 3종 즉시 발송 + 교통(F-07)·도서관 정기 알림 운영. **Redis 가 F-14 용으로 신규 도입**(`JobContext.redis_client` 배선). §D 완료.
 
 ## 진행 상황 스냅샷
 
@@ -20,6 +20,9 @@
 - TRANSIT 즉시 발송 종단 (커밋 미정): `ImmediateSendTransitRepository.list_pending` (LEFT JOIN 가드 + ACTIVE 필터 + type=TRANSIT) + `run_immediate_send_transit_job` (lunch 즉시 발송 워커 패턴 미러, SubwayClient 호출 + `build_transit_recurring_embed` 재사용) + `immediate_send_transit_poll` 잡 등록 (5초 인터벌). `lunch_inflight` → `immediate_send_inflight` 로 일반화하여 lunch + transit 즉시 발송 워커가 단일 in-flight 셋을 공유 (request_id 단일 시퀀스라 충돌 없음).
 - 테스트: **60 passing** (이전 37 + 즉시 발송 transit 회귀 가드 23: worker 4 + repository 4 + scheduler 1 + 기존 jobs/worker 케이스 확장 14). 신규 파일: `tests/notifications/transit/test_repository.py`.
 - origin/main 머지 (커밋 `e9ddc7f`): frontend 대시보드 + backend `routes/lunch.py` 부채 경로 + `bot/scrapers/` 부채 경로 유입. 백엔드 D-4 부채는 폐기 완료 (backend `routes/`, `data/` 삭제 + `bot/scrapers/` 삭제). 봇 측 D-5 도 정식 채널로 승격 — 알려진 부채 절 참고.
+- LIBRARY 스케줄 알림 종단 (커밋 `5691741`): `LibraryClient`(crawler — name 정규식 `제\s*(\d+)\s*열람실` 파싱 → 번호별 available/total 합산, 0=전체, 모듈 TTL 캐시 15s) + `library/embeds.py`(`build_library_embed`, F-15 긴급 빨강/키워드) + `library/worker.py:run_library_job`(F-13 임계값 평가 + F-14 Redis 상태머신 `library_alert:{user_id}:{room_id}` ∈ above/below, TTL 24h, 발송=큐 적재 시점에 below 갱신). **Redis 신규 도입** — `JobContext.redis_client` 배선(`main.py`), redis_url 미설정 시 잡 skip. `Settings.library_seat_url` + dev 의존성 `fakeredis` 추가. 백엔드 `LibraryConfig.reading_room_id` 는 논리 열람실 번호 Literal[0,1,2,3,5](0=전체 합산, 4 미운영) — A/B 분리·전체 합산은 봇 크롤러가 처리.
+- LIBRARY 즉시 발송 종단 (커밋 `4f89342`): `run_immediate_send_library_job` (lunch/transit 즉시발송 패턴 미러) + `build_library_immediate_embed`(현재 잔여/총만, 임계값·긴급 없음) + `immediate_send_library_poll` 잡(5초). crawler 실패·열람실 부재 시 워커 직접 FAILED INSERT(아키텍처 예외). Redis 미사용(즉시발송엔 상태머신 없음). 백엔드 `POST /api/v1/me/immediate-send/library` 와 짝.
+- 테스트: **84 passing** (이전 60 + LIBRARY 스케줄 가드 19[crawler 8 + worker 7 + embeds 4] + 즉시발송 LIBRARY 5[worker 4 + scheduler 1]). 신규 디렉터리: `tests/crawlers/library/`, `tests/notifications/library/`.
 
 인터페이스 합의 대기 (백엔드 결정 필요):
 - `notification_history.payload` JSONB 스키마 — backend roadmap §E-1. 현재는 임시 dict 로 INSERT 중.
@@ -27,7 +30,8 @@
 - F-22 관리자 알림 분담(봇 단독 vs 백엔드 분담) — 미정.
 
 알려진 부채:
-- `Dockerfile` / `docker-compose.test.yml` 미작성 — §0-1 잔여. 현재 로컬 `uv run` 으로만 실행. G-3 CI 이전에 필요.
+- **Redis 부분 도입 (2026-05-21)**: F-14 도서관 상태머신용으로 `JobContext.redis_client` + lifespan 연결이 추가됨. 단 subway/lunch/restaurants 크롤 캐시는 여전히 모듈 dict 만 사용 — 이들 Redis TTL 캐시 이전·E(F-22) 카운터 등은 후속(§C-1 잔여). 즉시발송 잡은 Redis 미사용.
+- `Dockerfile` / `docker-compose.test.yml` 미작성 — §0-1 잔여. 현재 로컬 `uv run` 으로만 실행. G-3 CI 이전에 필요. Redis 도입으로 dev/test compose 에 redis 서비스도 함께 필요.
 - alembic 호환성 통합 테스트 1건 미작성 — §0-3 잔여. 백엔드가 만든 스키마 변경이 봇 모델과 어긋나는 회귀를 잡지 못함.
 - DM 채널 캐시 미구현 — 매 발송 `fetch_user + create_dm`. 부하 측정 후 별도 PR.
 - §A-1 의 명시적 429 Retry-After/재시도는 §A-3 로 이관. 현재는 discord.py 내장 핸들러에만 의존.
@@ -93,7 +97,7 @@
 ### B-3. APScheduler 잡 등록 — 완료 (커밋 `d189b32` + `6703ded`)
 - `register_jobs` 가 `run_transit_job`/`run_lunch_job`/`run_library_job` 을 모두 등록 — TRANSIT/LIBRARY 5초, LUNCH 60초 `IntervalTrigger`. 잡 옵션 `max_instances=1`, `coalesce=True`, `misfire_grace_time=5`.
 - transit 잡은 `JobContext` 를 `args=[ctx]` 로 받아 SubwayClient 호출 + 큐 적재까지 실 수행.
-- lunch/library 잡은 여전히 stub (활성 구독 count 로그만). §C/§D 에서 본체 구현.
+- lunch 정기 잡은 여전히 stub (활성 구독 count 로그만, §C-4 후속). library 정기 잡은 본체 구현 완료(§D, 커밋 `5691741`). immediate_send lunch/transit/library 잡 3종도 등록됨.
 - 틱 주기 조정 가능 — TRANSIT/LIBRARY 부하 측정 후 5→10초 등 완화 검토.
 
 ### B-4. F-08 혼잡도·지연 정보 (우선순위: 중)
@@ -125,19 +129,21 @@
 - 가격 필터는 worker 단계에서. 오늘의 추천 하이라이트는 이전 추천 이력을 어디서 읽을지(history `payload` 활용) 결정 필요.
 - 정식 알림 시스템(스케줄 기반) 도입 시 다룬다. 현재 즉시 발송 종단만 우선.
 
-## §D. 도서관 알림 + F-14 상태 기반 중복 방지
+## §D. 도서관 알림 + F-14 상태 기반 중복 방지 — 완료 (커밋 `5691741`, 즉시발송 `4f89342`)
 
-### D-1. Library Crawler
-- `app/crawlers/library/client.py`: 좌석 페이지 크롤링 + 캐시. 30초 이내 갱신 필요(F-13 SLA).
+### D-1. Library Crawler — 완료
+- `app/crawlers/library/client.py`: 좌석 API(JSON) GET → name 정규식 파싱으로 논리 번호별 합산. `RoomSeats` dataclass 반환. 모듈 TTL 캐시(15s, asyncio.Lock). `Settings.library_seat_url` 미설정 시 `LibraryCrawlerFailed`. Redis TTL 캐시는 후속(§C-1).
 
-### D-2. 상태 기반 중복 방지 (F-14, 우선순위: 상)
-- Redis 키 `library_alert:{user_id}:{room_id}` ∈ {`above`, `below`}.
-- 발송 조건: 직전 `above` & 현재 임계값 이하 → 발송 → `below` 갱신.
-- 회복(임계값 위로) 시 → `above`로 갱신, 발송 안 함.
-- TTL은 충분히 길게(예: 24시간) — 자정 리셋이 아니라 상태 머신.
+### D-2. 상태 기반 중복 방지 (F-14) — 완료
+- Redis 키 `library_alert:{user_id}:{room_id}` ∈ {`above`, `below`}, TTL 24h.
+- 직전 `above` & 현재 임계값 이하 → 발송 + `below` 갱신(워커가 큐 적재 시점에). 회복 시 `above`. 키 미존재 시 `above` 기본값.
+- `redis_client` 미설정 환경에선 잡 skip(warn 로그). 회귀 가드: below→below 재발송 안 함.
 
-### D-3. F-15 긴급 임베드
-- 임계값보다 더 낮은 "긴급 임계값" 설정 시 임베드 색상 빨강 + title에 "긴급" 키워드.
+### D-3. F-15 긴급 임베드 — 완료
+- `urgent_threshold` 이하면 `build_library_embed` 가 색상 빨강 + title "🚨 [긴급]". `urgent_threshold` null 이면 긴급 표시 안 함.
+
+### D-4. LIBRARY 즉시 발송 — 완료 (커밋 `4f89342`)
+- `run_immediate_send_library_job` + `build_library_immediate_embed`(현재 좌석만). `immediate_send_library_poll` 5초 잡. 백엔드 `POST /me/immediate-send/library` 와 짝. crawler 실패·방 부재 시 워커 직접 FAILED INSERT.
 
 ## §E. F-22 관리자 알림
 
@@ -177,7 +183,9 @@
 
 ## 권장 순서
 
-**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (진행) → TRANSIT 즉시 발송 (완료) → §B(F-06) → §C-4 → §D (LIBRARY 즉시 발송 동반) → §E → §F → §G**
+**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (완료) → TRANSIT 즉시 발송 (완료) → §D (완료, LIBRARY 정기+즉시발송) → §B(F-06) → §C-4 → §E → §F → §G**
+
+남은 우선 작업: §E(F-22 관리자 알림), §B-4(F-08 혼잡도), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(Dockerfile·CI·health check), subway/lunch Redis 캐시 이전.
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 

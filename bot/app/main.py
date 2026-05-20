@@ -90,6 +90,7 @@ async def main() -> None:
         lunch_client=lunch_client,
         restaurants_client=restaurants_client,
         immediate_send_inflight=immediate_send_inflight,
+        redis_client=redis_client,
     )
 
     register_jobs(scheduler, ctx)

@@ -154,9 +154,32 @@ async def test_create_library_urgent_above_threshold_rejected(
         json={
             "type": "LIBRARY",
             "config": {
-                "reading_room_id": "R-101",
+                "reading_room_id": 1,
                 "threshold": 5,
                 "urgent_threshold": 10,
+            },
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_library_urgent_equal_threshold_rejected(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """F-15: urgent_threshold == threshold 이면 422.
+
+    같은 값이면 일반 임계값과 동시에 발동해 '긴급' 강조 의미가 사라지므로 거절한다.
+    """
+    client, _ = authed_client
+    response = await client.post(
+        _BASE,
+        json={
+            "type": "LIBRARY",
+            "config": {
+                "reading_room_id": 1,
+                "threshold": 5,
+                "urgent_threshold": 5,
             },
         },
     )

@@ -843,6 +843,52 @@
         ]
       }
     },
+    "/api/v1/me/immediate-send/library": {
+      "post": {
+        "tags": [
+          "immediate-send"
+        ],
+        "summary": "즉시 도서관 좌석 DM 발송 요청",
+        "description": "현재 사용자에게 지정한 열람실의 현재 잔여 좌석 DM 을 즉시 보내달라는 요청을 큐 테이블 (`immediate_send_requests`) 에 INSERT 하고 202 로 즉시 반환한다.\n\n**처리 흐름**: 봇 컨테이너가 5초 간격으로 큐를 폴링 → pending 행을 픽업 → 도서관 좌석 API 조회 → Discord DM 발송 → 큐 상태 업데이트.\n\n**임계값 없음**: 즉시 발송은 1회성 현재 스냅샷이라 정기 알림의 임계값(F-13)·긴급 표시(F-15)는 적용되지 않는다. `reading_room_id=0` 은 전체 열람실 합산이다.\n\n**인증 필요**: `Authorization: Bearer <access>` 헤더. 401 사유는 `INVALID_TOKEN` 또는 `USER_DELETED`.\n\n**쿨다운**: 동일 사용자의 미처리 요청이 큐에 남아 있으면 429 `IMMEDIATE_SEND_RATE_LIMITED` 로 거절된다. 이후 상태 조회 엔드포인트는 후속.",
+        "operationId": "dispatch_library_now_api_v1_me_immediate_send_library_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LibraryDispatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "큐 적재 결과 (request_id, requested_at)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryDispatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "422": {
+            "description": "reading_room_id 가 0·1·2·3·5 외 값(예: 4)"
+          },
+          "429": {
+            "description": "동일 사용자의 처리 대기 요청이 이미 큐에 존재 (IMMEDIATE_SEND_RATE_LIMITED)"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/health": {
       "get": {
         "summary": "Health",
@@ -884,20 +930,25 @@
       "LibraryConfig": {
         "properties": {
           "reading_room_id": {
-            "type": "string",
-            "maxLength": 50,
-            "minLength": 1,
+            "type": "integer",
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              5
+            ],
             "title": "Reading Room Id",
-            "description": "대상 열람실 식별자. 도서관 시스템의 reading room id 와 일치.",
+            "description": "대상 열람실 번호. 0·1·2·3·5 중 하나. 0 은 전체 열람실 잔여석 합산을 뜻한다(원 스펙 외 확장). 1·2·3·5 는 개별 열람실(제4열람실 미운영). 0(전체) 및 분리 운영되는 제1·제3열람실은 A/B 좌석을 합산해 잔여석을 계산한다.",
             "examples": [
-              "301"
+              1
             ]
           },
           "threshold": {
             "type": "integer",
             "minimum": 0.0,
             "title": "Threshold",
-            "description": "알림 발동 잔여 좌석 임계값(개). 잔여 ≤ threshold 일 때 발송.",
+            "description": "알림 발동 잔여 좌석 임계값(개). 대상 잔여석(개별 열람실, 또는 0이면 전체 합산) ≤ threshold 로 떨어질 때 발송한다 (분리 열람실은 A/B 합산 기준).",
             "examples": [
               20
             ]
@@ -913,7 +964,7 @@
               }
             ],
             "title": "Urgent Threshold",
-            "description": "긴급 알림 임계값(개). 잔여 ≤ urgent_threshold 면 강조 표시. `threshold` 이하여야 한다.",
+            "description": "긴급 임계값(개). 잔여석 ≤ urgent_threshold 면 임베드를 빨간색·'긴급' 표기로 강조한다(F-15). null 이면 긴급 표시를 쓰지 않으며, 값이 있으면 `threshold` 보다 엄격히 작아야 한다(같으면 긴급이 항상 일반 임계값과 동시에 발동해 강조 의미가 사라지므로 거절).",
             "examples": [
               5
             ]
@@ -925,7 +976,71 @@
           "threshold"
         ],
         "title": "LibraryConfig",
-        "description": "도서관 좌석 알림. 잔여 좌석이 임계값 이하로 떨어지면 DM 을 발송한다."
+        "description": "도서관 좌석 알림 (F-13/F-14/F-15). 지정 열람실의 잔여 좌석이 임계값 이하로\n떨어지는 순간 DM 을 발송한다. 회복 후 재하락 전까지 재발송을 막는 중복 방지(F-14)와\n긴급 임계값 강조(F-15)는 발송 측에서 처리한다. 정기 현황 알림은 범위 밖이다."
+      },
+      "LibraryDispatchRequest": {
+        "properties": {
+          "reading_room_id": {
+            "type": "integer",
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              5
+            ],
+            "title": "Reading Room Id",
+            "description": "대상 열람실 번호. 0·1·2·3·5 중 하나. 0 은 전체 열람실 잔여석 합산, 1·2·3·5 는 개별 열람실(제4열람실 미운영). 분리 운영되는 제1·제3열람실과 0(전체)은 봇이 A/B 좌석을 합산해 계산한다. 정기 알림의 `LibraryConfig` 와 동일한 의미다.",
+            "examples": [
+              1
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reading_room_id"
+        ],
+        "title": "LibraryDispatchRequest",
+        "description": "`POST /me/immediate-send/library` 의 요청 body.\n\n\"지금 이 열람실 잔여 좌석을 알려줘\" 1회성 요청이다. 임계값 알림(F-13)·중복 방지\n(F-14)·긴급 표시(F-15)는 정기 알림 설정에서 다루고, 즉시 발송은 현재 스냅샷만\n보내므로 `reading_room_id` 하나만 받는다.",
+        "examples": [
+          {
+            "reading_room_id": 1
+          }
+        ]
+      },
+      "LibraryDispatchResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "큐 적재 row 의 PK. 후속 상태 조회·로그 추적용.",
+            "examples": [
+              53
+            ]
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At",
+            "description": "서버가 요청을 INSERT 한 시각 (ISO 8601, UTC).",
+            "examples": [
+              "2026-05-21T02:10:00+00:00"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "requested_at"
+        ],
+        "title": "LibraryDispatchResponse",
+        "description": "`POST /me/immediate-send/library` 의 202 응답.\n\nAPI 는 큐 테이블 (`immediate_send_requests`) 에 한 줄을 INSERT 하고 즉시 반환한다.\n실제 좌석 조회와 Discord DM 발송은 봇 컨테이너의 폴링 잡(5초 간격)이 수행.\n`Lunch/TransitDispatchResponse` 와 응답 포맷은 동일하지만 도메인 의미가 달라 별도 모델로 둔다.",
+        "examples": [
+          {
+            "request_id": 53,
+            "requested_at": "2026-05-21T02:10:00+00:00"
+          }
+        ]
       },
       "LibraryUpdate": {
         "properties": {
@@ -962,7 +1077,7 @@
           },
           {
             "config": {
-              "reading_room_id": "301",
+              "reading_room_id": 1,
               "threshold": 30,
               "urgent_threshold": 10
             }
@@ -1360,7 +1475,7 @@
         "examples": [
           {
             "config": {
-              "reading_room_id": "301",
+              "reading_room_id": 1,
               "threshold": 20,
               "urgent_threshold": 5
             },
@@ -1429,7 +1544,7 @@
         "examples": [
           {
             "config": {
-              "reading_room_id": "301",
+              "reading_room_id": 1,
               "threshold": 20,
               "urgent_threshold": 5
             },

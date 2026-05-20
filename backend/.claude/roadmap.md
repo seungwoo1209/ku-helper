@@ -4,7 +4,7 @@
 현재 봇 컨테이너 작업이 우선이라 잠시 보류 중이지만, 백엔드 PR을 다시 시작할 때
 **여기서부터 읽어서 컨텍스트를 복구**할 것.
 
-마지막 갱신: 2026-05-20 (D-5 정식 승격 — `immediate_send_requests` 도메인이 정식 on-demand 알림 채널로 격상. `POST /api/v1/me/immediate-send/transit` 추가, lunch + transit 두 종 운영. roadmap §D-5 도 그에 맞춰 문구 갱신).
+마지막 갱신: 2026-05-21 (`POST /api/v1/me/immediate-send/library` 추가 — LUNCH/TRANSIT/LIBRARY 3종 즉시 발송 운영. notifications `LibraryConfig.reading_room_id` 는 논리 열람실 번호 Literal[0,1,2,3,5](0=전체 합산, 4 미운영)로 확정. §D-5 갱신).
 
 ## 진행 상황 스냅샷
 
@@ -87,7 +87,7 @@
 ### D-5. 정식 on-demand 알림 채널 — `immediate_send_requests`
 - **위치**: `app/domains/immediate_send/` 도메인, `immediate_send_requests` 테이블, `notification_history.immediate_send_request_id` 컬럼, alembic 0005.
 - **역할**: "프론트 버튼 → 백엔드 INSERT → 봇 폴링 → DM" 경로로 알림 종류별 즉시 발송을 제공한다. 컨테이너 경계(PG 매개)를 준수하면서 즉시성을 확보하는 정식 채널이며, 정기 알림 시스템과 별개 경로로 공존한다.
-- **현재 가동 종류**: LUNCH (`POST /api/v1/me/immediate-send/lunch`), TRANSIT (`POST /api/v1/me/immediate-send/transit`). LIBRARY 는 봇 측 §D Library Crawler 본체 작업과 같은 PR 에 추가.
+- **현재 가동 종류**: LUNCH (`POST /api/v1/me/immediate-send/lunch`), TRANSIT (`.../transit`), LIBRARY (`.../library`) — 3종 모두 운영. LIBRARY body 는 `reading_room_id: Literal[0,1,2,3,5]`(0=전체 합산), payload `{"reading_room_id": N}`. 봇 워커 `run_immediate_send_library_job` 와 짝.
 - **확장 패턴**: 도메인 `type` enum 은 TRANSIT/LUNCH/LIBRARY 모두 받는다. 새 종류 추가는 다음 4 단계.
   1. `schemas.py` 에 `<Type>DispatchRequest`/`<Type>DispatchResponse` 추가 + Field description/examples 동봉.
   2. `service.py` 에 `request_<type>_dispatch(user, body)` 메서드 — `payload` 는 봇 워커가 필요로 하는 키만 그대로 dict 화.
@@ -95,7 +95,7 @@
   4. 봇 측에 `app/notifications/<type>/repository.py` (LEFT JOIN 가드) + `run_immediate_send_<type>_job` worker + scheduler 잡 등록.
 - **테이블/마이그레이션은 손대지 않는다** — 0005 가 이미 enum 3종 모두를 받게 만들어 둠. payload JSONB 는 알림 종류별 의미가 다른 자유 dict 라 새 컬럼을 늘리지 않는다.
 - **`IMMEDIATE_SEND_RATE_LIMITED` 도메인 예외**: 정의돼 있으나 service 가 실제 rate-limit 검사를 수행하지 않는다 (별 PR). 정책 확정 후 service 진입 시점에 동일 user_id + pending 상태 검사 추가.
-- **연결 채널**: 봇 측 `bot/app/notifications/<type>/` 워커가 짝을 이룬다. 봇 roadmap §C-3 (lunch) + transit 즉시 발송 (커밋 미정).
+- **연결 채널**: 봇 측 `bot/app/notifications/<type>/` 워커가 짝을 이룬다. lunch/transit/library 즉시 발송 워커 3종 모두 가동(봇 roadmap §C-3, §D-4).
 
 ## E. 봇 컨테이너 흐름과 맞물리는 영역 (백엔드 측 책임 한정)
 

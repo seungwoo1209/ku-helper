@@ -1,7 +1,10 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.notifications.library.worker import run_library_job
+from app.notifications.library.worker import (
+    run_immediate_send_library_job,
+    run_library_job,
+)
 from app.notifications.lunch.worker import run_immediate_send_lunch_job, run_lunch_job
 from app.notifications.transit.worker import (
     run_immediate_send_transit_job,
@@ -54,6 +57,7 @@ def register_jobs(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+        args=[ctx],
     )
     scheduler.add_job(
         run_immediate_send_lunch_job,
@@ -68,6 +72,15 @@ def register_jobs(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:
         run_immediate_send_transit_job,
         trigger=IntervalTrigger(seconds=IMMEDIATE_SEND_TICK_SECONDS),
         id="immediate_send_transit_poll",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+        args=[ctx],
+    )
+    scheduler.add_job(
+        run_immediate_send_library_job,
+        trigger=IntervalTrigger(seconds=IMMEDIATE_SEND_TICK_SECONDS),
+        id="immediate_send_library_poll",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=_MISFIRE_GRACE_SECONDS,

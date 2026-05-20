@@ -3,7 +3,10 @@ from typing import Any
 import pytest
 
 from app.domains.immediate_send.models import ImmediateSendRequest
-from app.domains.immediate_send.schemas import TransitDispatchRequest
+from app.domains.immediate_send.schemas import (
+    LibraryDispatchRequest,
+    TransitDispatchRequest,
+)
 from app.domains.immediate_send.service import ImmediateSendService
 from app.domains.notifications.models import NotificationType
 from app.domains.users.models import User, UserRole, UserStatus
@@ -68,3 +71,23 @@ async def test_request_transit_dispatch_calls_repository_with_transit_payload() 
     assert repo.created == [
         (7, NotificationType.TRANSIT, {"station_name": "강남", "line": "2호선"})
     ]
+
+
+@pytest.mark.asyncio
+async def test_request_library_dispatch_calls_repository_with_library_payload() -> None:
+    repo = _FakeRepository()
+    service = ImmediateSendService(repo)  # type: ignore[arg-type]
+    user = User(
+        id=9,
+        discord_id=555555555,
+        discord_username="reader",
+        status=UserStatus.ACTIVE,
+        role=UserRole.USER,
+    )
+    body = LibraryDispatchRequest(reading_room_id=1)
+
+    request = await service.request_library_dispatch(user, body)
+
+    assert request.type == NotificationType.LIBRARY
+    assert request.user_id == 9
+    assert repo.created == [(9, NotificationType.LIBRARY, {"reading_room_id": 1})]
