@@ -135,23 +135,37 @@ class LunchConfig(BaseModel):
 
 
 class LibraryConfig(BaseModel):
-    """도서관 좌석 알림. 잔여 좌석이 임계값 이하로 떨어지면 DM 을 발송한다."""
+    """도서관 좌석 알림 (F-13/F-14/F-15). 지정 열람실의 잔여 좌석이 임계값 이하로
+    떨어지는 순간 DM 을 발송한다. 회복 후 재하락 전까지 재발송을 막는 중복 방지(F-14)와
+    긴급 임계값 강조(F-15)는 발송 측에서 처리한다. 정기 현황 알림은 범위 밖이다."""
 
-    reading_room_id: str = Field(
-        min_length=1,
-        max_length=50,
-        description="대상 열람실 식별자. 도서관 시스템의 reading room id 와 일치.",
-        examples=["301"],
+    # 건국대 상허기념도서관 열람실 번호. 제4열람실은 미운영이라 유효 집합에서 제외한다.
+    # 0 은 전체 열람실 잔여석 합산(원 스펙 외 확장, docs/requirements/features.md F-13 참고).
+    # 제1·제3열람실은 크롤러상 A/B 로 분리돼 있으나 잔여석은 A+B 합산으로 평가한다.
+    reading_room_id: Literal[0, 1, 2, 3, 5] = Field(
+        description=(
+            "대상 열람실 번호. 0·1·2·3·5 중 하나. 0 은 전체 열람실 잔여석 합산을 "
+            "뜻한다(원 스펙 외 확장). 1·2·3·5 는 개별 열람실(제4열람실 미운영). "
+            "0(전체) 및 분리 운영되는 제1·제3열람실은 A/B 좌석을 합산해 잔여석을 계산한다."
+        ),
+        examples=[1],
     )
     threshold: int = Field(
         ge=0,
-        description="알림 발동 잔여 좌석 임계값(개). 잔여 ≤ threshold 일 때 발송.",
+        description=(
+            "알림 발동 잔여 좌석 임계값(개). 대상 잔여석(개별 열람실, 또는 0이면 "
+            "전체 합산) ≤ threshold 로 떨어질 때 발송한다 (분리 열람실은 A/B 합산 기준)."
+        ),
         examples=[20],
     )
     urgent_threshold: int | None = Field(
         default=None,
         ge=0,
-        description="긴급 알림 임계값(개). 잔여 ≤ urgent_threshold 면 강조 표시. `threshold` 이하여야 한다.",
+        description=(
+            "긴급 임계값(개). 잔여석 ≤ urgent_threshold 면 임베드를 빨간색·'긴급' "
+            "표기로 강조한다(F-15). null 이면 긴급 표시를 쓰지 않으며, 값이 있으면 "
+            "`threshold` 이하여야 한다."
+        ),
         examples=[5],
     )
 
@@ -238,7 +252,7 @@ class _LibraryCreate(BaseModel):
                     "type": "LIBRARY",
                     "enabled": True,
                     "config": {
-                        "reading_room_id": "301",
+                        "reading_room_id": 1,
                         "threshold": 20,
                         "urgent_threshold": 5,
                     },
@@ -340,7 +354,7 @@ class LibraryUpdate(BaseModel):
                 {"enabled": True},
                 {
                     "config": {
-                        "reading_room_id": "301",
+                        "reading_room_id": 1,
                         "threshold": 30,
                         "urgent_threshold": 10,
                     }
@@ -450,7 +464,7 @@ class _LibraryRead(BaseModel):
                     "type": "LIBRARY",
                     "enabled": True,
                     "config": {
-                        "reading_room_id": "301",
+                        "reading_room_id": 1,
                         "threshold": 20,
                         "urgent_threshold": 5,
                     },

@@ -154,7 +154,7 @@ async def test_create_library_urgent_above_threshold_rejected(
         json={
             "type": "LIBRARY",
             "config": {
-                "reading_room_id": "R-101",
+                "reading_room_id": 1,
                 "threshold": 5,
                 "urgent_threshold": 10,
             },

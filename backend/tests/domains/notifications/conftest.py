@@ -33,7 +33,7 @@ async def notification_factory(db_session: AsyncSession) -> NotificationFactory:
                     "highlight_today_pick": True,
                 },
                 NotificationType.LIBRARY: {
-                    "reading_room_id": "R-101",
+                    "reading_room_id": 1,
                     "threshold": 5,
                 },
             }[type_]
