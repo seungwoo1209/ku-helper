@@ -116,6 +116,8 @@ def _make_arrival(direction: str = "상행", seconds: int = 120) -> SubwayArriva
         train_no="2001",
         arvl_code=1,
         train_type="일반",
+        train_line_name="",
+        received_at=None,
     )
 
 
@@ -424,6 +426,8 @@ async def test_same_station_fetches_once(monkeypatch: pytest.MonkeyPatch) -> Non
             train_no="9001",
             arvl_code=1,
             train_type="일반",
+            train_line_name="",
+            received_at=None,
         ),
     ]
     fake_client = _FakeSubwayClient(arrivals, call_count)
