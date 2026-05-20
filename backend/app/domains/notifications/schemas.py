@@ -164,15 +164,19 @@ class LibraryConfig(BaseModel):
         description=(
             "긴급 임계값(개). 잔여석 ≤ urgent_threshold 면 임베드를 빨간색·'긴급' "
             "표기로 강조한다(F-15). null 이면 긴급 표시를 쓰지 않으며, 값이 있으면 "
-            "`threshold` 이하여야 한다."
+            "`threshold` 보다 엄격히 작아야 한다(같으면 긴급이 항상 일반 임계값과 "
+            "동시에 발동해 강조 의미가 사라지므로 거절)."
         ),
         examples=[5],
     )
 
     @model_validator(mode="after")
-    def _urgent_le_threshold(self) -> "LibraryConfig":
-        if self.urgent_threshold is not None and self.urgent_threshold > self.threshold:
-            raise ValueError("urgent_threshold must be ≤ threshold")
+    def _urgent_lt_threshold(self) -> "LibraryConfig":
+        if (
+            self.urgent_threshold is not None
+            and self.urgent_threshold >= self.threshold
+        ):
+            raise ValueError("urgent_threshold must be strictly less than threshold")
         return self
 
 
