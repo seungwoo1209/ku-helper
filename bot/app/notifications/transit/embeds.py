@@ -69,7 +69,8 @@ def build_transit_recurring_embed(
             label = _ARVL_CODE_LABEL.get(arr.arvl_code, "운행중")
             minutes_label = _format_minutes_label(eff)
             field_name = f"{label} · {minutes_label}" if minutes_label else label
-            field_value = _build_field_value(arr)
+            # 테스트용 raw 메시지 노출 (TODO: 추후 정리)
+            field_value = _build_field_value(arr, include_raw_messages=True)
             embed.add_field(name=field_name, value=field_value, inline=False)
 
     payload = _build_payload(station_name, line, selected, now)
@@ -149,20 +150,30 @@ def _format_minutes_label(effective_seconds: int) -> str:
     return f"{minutes}분 후"
 
 
-def _build_field_value(arr: SubwayArrival) -> str:
+def _build_field_value(
+    arr: SubwayArrival,
+    include_raw_messages: bool = False,
+) -> str:
     """임베드 field value 를 구성한다.
 
     첫 줄: train_line_name 이 있으면 그대로, 없으면 direction → headed_for 폴백.
-    둘째 줄: train_type 이 있으면 [train_type], 없으면 생략.
+    둘째 줄: train_type 이 truthy 이고 "일반" 이 아닌 경우에만 [train_type] 추가.
+             train_type == "일반" 이면 두 번째 줄을 추가하지 않는다.
+    include_raw_messages=True 이면 arvlMsg2/arvlMsg3 원문을 마지막에 추가한다.
+    테스트용 raw 메시지 노출 (TODO: 추후 정리)
     """
     first_line = (
         arr.train_line_name
         if arr.train_line_name
         else f"{arr.direction} → {arr.headed_for}"
     )
-    if arr.train_type:
-        return f"{first_line}\n[{arr.train_type}]"
-    return first_line
+    lines = [first_line]
+    if arr.train_type and arr.train_type != "일반":
+        lines.append(f"[{arr.train_type}]")
+    if include_raw_messages:
+        lines.append(f"arvlMsg2: {arr.arrival_message}")
+        lines.append(f"arvlMsg3: {arr.arrival_message_detail}")
+    return "\n".join(lines)
 
 
 def _build_payload(

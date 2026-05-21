@@ -31,6 +31,8 @@ def _make_arrival(
     train_type: str = "일반",
     train_line_name: str = "성수행(목적지역) - 구로디지털단지방면(다음역)",
     received_at: datetime | None = None,
+    arrival_message: str = "도착",
+    arrival_message_detail: str = "강남 도착",
 ) -> SubwayArrival:
     return SubwayArrival(
         station_name="강남",
@@ -38,8 +40,8 @@ def _make_arrival(
         line_label=line_label,
         direction=direction,
         headed_for=headed_for,
-        arrival_message="도착",
-        arrival_message_detail="강남 도착",
+        arrival_message=arrival_message,
+        arrival_message_detail=arrival_message_detail,
         arrival_seconds=arrival_seconds,
         train_no="2001",
         arvl_code=arvl_code,
@@ -228,12 +230,16 @@ def test_field_value_first_line_falls_back_to_direction_headed_for() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 테스트: train_type 빈 문자열 → 두 번째 줄 없음
+# 테스트: train_type 빈 문자열 → [train_type] 괄호 줄 없음
 # ---------------------------------------------------------------------------
 
 
-def test_field_value_no_second_line_when_train_type_empty() -> None:
-    """train_type 이 빈 문자열이면 field value 에 줄 바꿈이 없다."""
+def test_field_value_no_train_type_bracket_when_train_type_empty() -> None:
+    """train_type 이 빈 문자열이면 field value 에 '[' 괄호(열차 종류 표시)가 없다.
+
+    recurring 빌더는 arvlMsg2/arvlMsg3 raw 줄을 항상 추가하므로
+    줄 바꿈 존재 여부 대신 '[' 포함 여부로 회귀를 검증한다.
+    """
     arr = _make_arrival(train_type="")
     embed, _ = build_transit_recurring_embed(
         station_name="강남",
@@ -244,7 +250,7 @@ def test_field_value_no_second_line_when_train_type_empty() -> None:
     d = embed.to_dict()
     fields = d.get("fields", [])
     assert len(fields) == 1
-    assert "\n" not in fields[0]["value"]
+    assert "[" not in fields[0]["value"]
 
 
 # ---------------------------------------------------------------------------
@@ -545,3 +551,84 @@ def test_arrival_embed_field_name_label_only_when_effective_zero() -> None:
     # arvl_code=2 → "출발". 분 표시 없으므로 "·" 없어야 한다.
     assert fields[0]["name"] == "출발"
     assert "·" not in fields[0]["name"]
+
+
+# ===========================================================================
+# 회귀 가드: train_type "일반" 처리 (변경 1)
+# ===========================================================================
+
+
+def test_recurring_embed_train_type_ilban_no_bracket() -> None:
+    """train_type == '일반' 이면 recurring 임베드 field value 에 '[일반]' 이 없다."""
+    arr = _make_arrival(train_type="일반")
+    embed, _ = build_transit_recurring_embed(
+        station_name="강남",
+        line="2호선",
+        arrivals=[arr],
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    assert "[일반]" not in fields[0]["value"]
+
+
+def test_recurring_embed_train_type_express_shows_bracket() -> None:
+    """train_type == '급행' 이면 recurring 임베드 field value 에 '[급행]' 이 포함된다 (회귀 가드)."""
+    arr = _make_arrival(train_type="급행")
+    embed, _ = build_transit_recurring_embed(
+        station_name="강남",
+        line="2호선",
+        arrivals=[arr],
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    assert "[급행]" in fields[0]["value"]
+
+
+# ===========================================================================
+# 회귀 가드: recurring 임베드에 arvlMsg2/arvlMsg3 raw 노출 (변경 2)
+# ===========================================================================
+
+
+def test_recurring_embed_contains_raw_messages() -> None:
+    """recurring 임베드 field value 에 'arvlMsg2:' 와 'arvlMsg3:' 가 포함된다 (테스트용 raw 노출)."""
+    arr = _make_arrival(
+        arrival_message="[2]건대입구방면 진입",
+        arrival_message_detail="건대입구 도착",
+    )
+    embed, _ = build_transit_recurring_embed(
+        station_name="강남",
+        line="2호선",
+        arrivals=[arr],
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    value = fields[0]["value"]
+    assert "arvlMsg2:" in value
+    assert "arvlMsg3:" in value
+    assert "[2]건대입구방면 진입" in value
+    assert "건대입구 도착" in value
+
+
+def test_arrival_embed_does_not_contain_raw_messages() -> None:
+    """arrival 임베드 field value 에 'arvlMsg2:' 와 'arvlMsg3:' 가 없다 (recurring 한정 정책)."""
+    arr = _make_arrival_single()
+    embed, _ = build_transit_arrival_embed(
+        station_name="강남",
+        line="2호선",
+        direction="상행",
+        minutes_before=5,
+        arrival=arr,
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    value = fields[0]["value"]
+    assert "arvlMsg2:" not in value
+    assert "arvlMsg3:" not in value
