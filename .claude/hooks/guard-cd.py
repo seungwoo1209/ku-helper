@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """cd가 프로젝트 루트를 벗어나는 걸 막는 PreToolUse 훅."""
-import json, sys, os, re, shlex, subprocess
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 def find_project_root(start: Path) -> Path:
@@ -24,6 +29,8 @@ def find_project_root(start: Path) -> Path:
     return start.resolve()
 
 def extract_cd_targets(command: str):
+    # 한계: `$(cd /tmp)` / `(cd /tmp && ls)` 같은 명령 치환·서브셸은 분리 대상이 아니라 검출 못 함.
+    # 보안 경계가 아닌 실수 방지용 가드이므로 의도된 trade-off.
     targets = []
     for seg in re.split(r'(?:&&|\|\||;|\|)', command):
         seg = seg.strip()
