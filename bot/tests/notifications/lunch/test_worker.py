@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis.aioredis
 import pytest
 
 from app.crawlers.lunch.client import LunchCorner, LunchMenu
@@ -47,6 +48,7 @@ def _make_ctx(
         http_client=MagicMock(),
         session_maker=session_maker,
         settings=settings,
+        redis_client=fakeredis.aioredis.FakeRedis(decode_responses=True),
         in_flight_notification_ids=set(),
     )
 

@@ -1,11 +1,16 @@
 """서울시 지하철 실시간 도착정보 API 클라이언트.
 
 docs/seoul_subway_realtime_arrival_api.md 명세 기반.
-Redis TTL 캐시는 §C-1(Redis 도입) 이후 추가한다.
+Redis TTL 캐시: 키 `subway:arrivals:{station_name}`, TTL 30초.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+import json
+from collections.abc import Awaitable
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, cast
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -14,6 +19,9 @@ import structlog
 
 from app.core.config import Settings
 from app.crawlers.subway.exceptions import SubwayApiAuthFailed, SubwayApiUnavailable
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
 
 _logger = structlog.get_logger(__name__)
 
@@ -56,6 +64,9 @@ _RECPTN_DT_FORMATS: list[str] = [
 
 _KST = ZoneInfo("Asia/Seoul")
 
+# Redis TTL (초).
+_REDIS_TTL_SECONDS = 30
+
 
 @dataclass(frozen=True)
 class SubwayArrival:
@@ -82,10 +93,13 @@ class SubwayClient:
     """서울시 실시간 지하철 도착정보 API 래퍼.
 
     http_client 는 lifespan 에서 1회 생성한 공유 AsyncClient 를 주입받는다.
-    SubwayClient 인스턴스 내부에서 새 클라이언트를 만들지 않는다.
+    redis 는 TTL 캐시용. 한 틱 내 같은 station 중복 Redis 조회를 막기 위해
+    호출자(worker)가 arrivals_cache dict 를 L1 캐시로 유지한다.
     """
 
-    def __init__(self, http_client: httpx.AsyncClient, settings: Settings) -> None:
+    def __init__(
+        self, http_client: httpx.AsyncClient, settings: Settings, redis: "Redis"
+    ) -> None:
         # subway_api_key 가 None 이거나 빈값이면 즉시 실패.
         raw_key = (
             settings.subway_api_key.get_secret_value()
@@ -97,12 +111,33 @@ class SubwayClient:
         # SecretStr 값은 여기서 1회만 풀어 인스턴스 변수에 저장. 이후 외부 노출 금지.
         self._api_key: str = raw_key
         self._http_client = http_client
+        self._redis = redis
 
     async def fetch_arrivals(self, station_name: str) -> list[SubwayArrival]:
         """역명으로 실시간 도착 정보를 조회한다.
 
+        Redis TTL 캐시(30s) hit 시 외부 API 호출을 생략한다.
         반환값은 SubwayArrival 리스트. 해당 역 데이터 없음(INFO-200) → 빈 리스트.
         """
+        redis_key = f"subway:arrivals:{station_name}"
+        raw = await cast("Awaitable[str | None]", self._redis.get(redis_key))
+        if raw is not None:
+            _logger.debug("subway_cache_hit", station_name=station_name)
+            return _deserialize_arrivals(raw)
+
+        arrivals = await self._fetch_from_api(station_name)
+        serialized = json.dumps(
+            [asdict(a) for a in arrivals],
+            default=str,
+            ensure_ascii=False,
+        )
+        await cast(
+            "Awaitable[object]",
+            self._redis.setex(redis_key, _REDIS_TTL_SECONDS, serialized),
+        )
+        return arrivals
+
+    async def _fetch_from_api(self, station_name: str) -> list[SubwayArrival]:
         encoded = quote(station_name, safe="")
         url = f"{_BASE_URL}/{self._api_key}/json/realtimeStationArrival/0/{_END_INDEX}/{encoded}"
         # 로그에는 key 를 자리표시자로 마스킹한 URL 만 사용한다.
@@ -189,6 +224,38 @@ class SubwayClient:
             train_line_name=str(row.get("trainLineNm", "")),
             received_at=_parse_recptn_dt(str(row.get("recptnDt", ""))),
         )
+
+
+def _deserialize_arrivals(raw: str) -> list[SubwayArrival]:
+    """Redis 캐시 JSON → SubwayArrival 리스트. 모듈 내부 전용."""
+    items: list[dict[str, object]] = json.loads(raw)
+    result: list[SubwayArrival] = []
+    for item in items:
+        received_at_raw = item.get("received_at")
+        received_at: datetime | None = None
+        if isinstance(received_at_raw, str) and received_at_raw:
+            try:
+                received_at = datetime.fromisoformat(received_at_raw)
+            except ValueError:
+                received_at = None
+        result.append(
+            SubwayArrival(
+                station_name=str(item.get("station_name", "")),
+                subway_id=str(item.get("subway_id", "")),
+                line_label=str(item.get("line_label", "")),
+                direction=str(item.get("direction", "")),
+                headed_for=str(item.get("headed_for", "")),
+                arrival_message=str(item.get("arrival_message", "")),
+                arrival_message_detail=str(item.get("arrival_message_detail", "")),
+                arrival_seconds=int(str(item.get("arrival_seconds", 0))),
+                train_no=str(item.get("train_no", "")),
+                arvl_code=int(str(item.get("arvl_code", 99))),
+                train_type=str(item.get("train_type", "")),
+                train_line_name=str(item.get("train_line_name", "")),
+                received_at=received_at,
+            )
+        )
+    return result
 
 
 def _parse_recptn_dt(raw: str) -> datetime | None:

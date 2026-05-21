@@ -39,12 +39,9 @@ async def main() -> None:
     await _verify_database()
     logger.info("database_ready")
 
-    redis_client: Redis | None = None
-    if settings.redis_url:
-        redis_client = await create_redis_client(settings.redis_url)
-        logger.info("redis_ready")
-    else:
-        logger.warning("redis_skipped_no_url")
+    # redis_url 은 필수. create_redis_client 가 ping 실패 시 예외 → 봇 기동 실패.
+    redis_client: Redis = await create_redis_client(settings.redis_url)
+    logger.info("redis_ready")
 
     # httpx.AsyncClient: 공공 API 호출용. lifespan 에서 1회 생성·종료.
     http_client = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS)
@@ -55,12 +52,13 @@ async def main() -> None:
     browser = await playwright.chromium.launch(headless=True)
     logger.info("playwright_ready")
 
-    lunch_client = LunchClient(browser, settings.cafeteria_url)
+    lunch_client = LunchClient(browser, settings.cafeteria_url, redis=redis_client)
     try:
         restaurants_client: RestaurantsClient | None = RestaurantsClient(
             http_client,
             settings.naver_search_client_id,
             settings.naver_search_client_secret,
+            redis=redis_client,
         )
         logger.info("restaurants_client_ready")
     except RestaurantsCrawlerFailed as exc:
@@ -86,11 +84,11 @@ async def main() -> None:
         http_client=http_client,
         session_maker=async_session_maker,
         settings=settings,
+        redis_client=redis_client,
         in_flight_notification_ids=in_flight_notification_ids,
         lunch_client=lunch_client,
         restaurants_client=restaurants_client,
         immediate_send_inflight=immediate_send_inflight,
-        redis_client=redis_client,
     )
 
     register_jobs(scheduler, ctx)
@@ -119,8 +117,7 @@ async def main() -> None:
         await browser.close()
         await playwright.stop()
         await http_client.aclose()
-        if redis_client is not None:
-            await redis_client.aclose()
+        await redis_client.aclose()
         await engine.dispose()
         logger.info("bot_shutdown_complete")
 

@@ -17,9 +17,8 @@ class Settings(BaseSettings):
 
     database_url: str
 
-    # §0 부트스트랩 단계에서는 Redis 없이도 기동 가능하도록 옵셔널.
-    # §A(Sender)에서 캐시·쿨다운 키가 도입되면 필수화한다.
-    redis_url: str | None = None
+    # 외부 API 캐시·LIBRARY 상태머신·TRANSIT arrival dedup 공용. 미설정 시 봇 기동 실패.
+    redis_url: str
 
     discord_bot_token: SecretStr
 

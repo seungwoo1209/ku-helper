@@ -5,21 +5,26 @@ example-response.json 형태(`data.list[].seats.{total,available}`, `.name`,
 크롤러 응답의 물리 id 가 아니라 name('제 N열람실 (A)')을 파싱해 번호로 그룹 합산하므로
 제1·제3열람실의 A/B 분리는 자연스럽게 합쳐지고, 번호 0 은 전체 열람실 합산을 뜻한다.
 
-Redis TTL 캐시는 §C-1 이후. 현재는 모듈 dict TTL 캐시로 한 틱당 외부호출을 1회로 합친다.
+Redis TTL 캐시: 키 `library:rooms:{sha1(url)[:12]}`, TTL 15s.
 """
 
 from __future__ import annotations
 
-import asyncio
+import hashlib
+import json
 import re
-import time
-from dataclasses import dataclass
+from collections.abc import Awaitable
+from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING, cast
 
 import httpx
 import structlog
 
 from app.core.config import Settings
 from app.crawlers.library.exceptions import LibraryCrawlerFailed
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
 
 _logger = structlog.get_logger(__name__)
 
@@ -29,8 +34,8 @@ _READING_ROOM_TYPE = "열람실"
 _ROOM_NAME_RE = re.compile(r"제\s*(\d+)\s*열람실")
 # 전체 열람실 합산을 가리키는 논리 번호.
 _ALL_ROOMS_NUMBER = 0
-# 모듈 캐시 TTL(초). 5초 폴링 + F-13 30초 SLA 사이에서 외부호출 빈도를 낮춘다.
-_CACHE_TTL_SECONDS = 5.0
+# Redis TTL(초). 5초 폴링 + F-13 30초 SLA 사이에서 외부호출 빈도를 낮춘다.
+_REDIS_TTL_SECONDS = 15
 
 
 @dataclass(frozen=True)
@@ -43,10 +48,9 @@ class RoomSeats:
     available: int
 
 
-# 모듈 TTL 캐시: url → (monotonic_deadline, snapshot).
-# 다수 구독·짧은 폴링이 한 번의 외부호출로 합쳐진다.
-_cache: dict[str, tuple[float, dict[int, RoomSeats]]] = {}
-_cache_lock = asyncio.Lock()
+def _url_cache_key(url: str) -> str:
+    sha = hashlib.sha1(url.encode()).hexdigest()[:12]
+    return f"library:rooms:{sha}"
 
 
 class LibraryClient:
@@ -57,29 +61,39 @@ class LibraryClient:
     (SubwayClient 의 키 검증과 동형).
     """
 
-    def __init__(self, http_client: httpx.AsyncClient, settings: Settings) -> None:
+    def __init__(
+        self, http_client: httpx.AsyncClient, settings: Settings, redis: "Redis"
+    ) -> None:
         url = settings.library_seat_url
         if not url:
             raise LibraryCrawlerFailed("library_url_missing")
         self._url: str = url
         self._http = http_client
+        self._redis = redis
 
     async def fetch_seats(self) -> dict[int, RoomSeats]:
         """열람실 좌석을 논리 번호별로 집계해 반환한다. 키 0 = 전체 합산.
 
-        모듈 TTL 캐시가 유효하면 외부호출을 생략한다.
+        Redis TTL 캐시(15s) hit 시 외부호출을 생략한다.
         """
-        async with _cache_lock:
-            now = time.monotonic()
-            cached = _cache.get(self._url)
-            if cached is not None and cached[0] > now:
-                _logger.debug("library_cache_hit", rooms=len(cached[1]))
-                return cached[1]
-
-            snapshot = await self._fetch_and_parse()
-            _cache[self._url] = (now + _CACHE_TTL_SECONDS, snapshot)
-            _logger.info("library_fetched", rooms=len(snapshot))
+        redis_key = _url_cache_key(self._url)
+        raw = await cast("Awaitable[str | None]", self._redis.get(redis_key))
+        if raw is not None:
+            snapshot = _deserialize_rooms(raw)
+            _logger.debug("library_cache_hit", rooms=len(snapshot))
             return snapshot
+
+        snapshot = await self._fetch_and_parse()
+        serialized = json.dumps(
+            {str(k): asdict(v) for k, v in snapshot.items()},
+            ensure_ascii=False,
+        )
+        await cast(
+            "Awaitable[object]",
+            self._redis.setex(redis_key, _REDIS_TTL_SECONDS, serialized),
+        )
+        _logger.info("library_fetched", rooms=len(snapshot))
+        return snapshot
 
     async def _fetch_and_parse(self) -> dict[int, RoomSeats]:
         try:
@@ -148,6 +162,26 @@ class LibraryClient:
         return snapshot
 
 
+def _deserialize_rooms(raw: str) -> dict[int, RoomSeats]:
+    """Redis 캐시 JSON → dict[int, RoomSeats]. 모듈 내부 전용."""
+    data: dict[str, object] = json.loads(raw)
+    result: dict[int, RoomSeats] = {}
+    for key_str, item in data.items():
+        if not isinstance(item, dict):
+            continue
+        try:
+            room_number = int(key_str)
+        except ValueError:
+            continue
+        result[room_number] = RoomSeats(
+            room_number=int(item.get("room_number", 0)),
+            label=str(item.get("label", "")),
+            total=int(item.get("total", 0)),
+            available=int(item.get("available", 0)),
+        )
+    return result
+
+
 def _parse_row(row: object) -> tuple[int, int, int] | None:
     """좌석 API 행 → (room_number, total, available). 대상 외 행이면 None."""
     if not isinstance(row, dict):
@@ -170,4 +204,4 @@ def _parse_row(row: object) -> tuple[int, int, int] | None:
 
 
 def _clear_cache_for_tests() -> None:
-    _cache.clear()
+    """하위 호환용 stub. Redis 캐시 전환 후 테스트에서 직접 fakeredis 를 flush한다."""

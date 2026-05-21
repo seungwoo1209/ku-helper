@@ -78,7 +78,7 @@ def _patch_client(
     raises: Exception | None = None,
 ) -> None:
     class _Client:
-        def __init__(self, http: Any, settings: Any) -> None:
+        def __init__(self, http: Any, settings: Any, redis: Any = None) -> None:
             pass
 
         async def fetch_seats(self) -> dict[int, RoomSeats]:
@@ -90,12 +90,18 @@ def _patch_client(
 
 
 def _ctx(redis: Any) -> JobContext:
+    # redis_client 는 필수. 테스트에서는 fakeredis 또는 MagicMock 을 주입한다.
+    r = (
+        redis
+        if redis is not None
+        else fakeredis.aioredis.FakeRedis(decode_responses=True)
+    )
     return JobContext(
         queue=asyncio.Queue(),
         http_client=MagicMock(),
         session_maker=_FakeSessionMaker(),
         settings=MagicMock(),
-        redis_client=redis,
+        redis_client=r,
     )
 
 
@@ -169,15 +175,21 @@ async def test_recovery_sets_above_without_send(
 
 
 @pytest.mark.asyncio
-async def test_skips_when_redis_none(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_redis_state_persists_below_after_queue(
+    monkeypatch: pytest.MonkeyPatch, redis: fakeredis.aioredis.FakeRedis
+) -> None:
+    """큐 적재 후 상태 키가 below 로 저장됨을 검증 (F-14 상태머신 지속성)."""
     pair = _notification({"reading_room_id": 1, "threshold": 20})
     _patch_repo(monkeypatch, [pair])
-    _patch_client(monkeypatch, {1: _room(1, available=10)})
-    ctx = _ctx(None)
+    _patch_client(monkeypatch, {1: _room(1, available=5)})
+    ctx = _ctx(redis)
 
     await run_library_job(ctx)
 
-    assert ctx.queue.qsize() == 0
+    # 상태는 below 여야 하고 큐에 1건이 있어야 한다.
+    assert ctx.queue.qsize() == 1
+    state = await redis.get(_state_key(42, 1))
+    assert state == "below"
 
 
 @pytest.mark.asyncio
