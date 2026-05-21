@@ -43,6 +43,7 @@
 - 즉시 발송 dedupe 는 `notification_history.immediate_send_request_id` FK 의존 — 봇은 SELECT 만, UPDATE 권한 없음. 백엔드 roadmap §D-5 (정식 on-demand 채널) 와 같은 라이프사이클.
 - 즉시 발송 lunch/transit 워커가 `ImmediateSendRequestRow` dataclass 를 `bot/app/notifications/lunch/repository.py` 에서 공유한다. 알림 종류별 payload 검증이 필요해지는 시점에 `app/notifications/repository.py` 또는 `app/notifications/immediate_send/` 공통 모듈로 이전한다. 현재는 LIBRARY 즉시 발송 추가 시 같은 패턴을 따르면 충분.
 - `immediate_send_inflight` 메모리 셋 — 봇 재기동 시 비워진다. 같은 request_id 가 두 번 처리되는 회귀는 `notification_history.immediate_send_request_id` partial unique 인덱스 + LEFT JOIN 가드로 INSERT 단계에서 막힌다 (DM 자체가 두 번 발송될 가능성은 거의 없음 — 5초 폴링 간격 내 재기동만 위험).
+- **크롤러 TTL 코드 하드코딩** — `subway:arrivals` 30s, `lunch:menu` 7d, `restaurants:pool` 24h, `library:rooms` 15s 가 각 크롤러 모듈 상수로 박혀 있다. 운영 중 조정하려면 코드 변경 + 재배포 필요. 부하·신선도 SLA 측정 후 `Settings` 의 명시 키(`subway_cache_ttl_seconds` 등)로 이전 검토. (PR #10 review)
 - **아키텍처 예외: Lunch worker 직접 FAILED INSERT** — `app/notifications/lunch/worker.py` 의 crawler 실패 분기에서 워커가 `NotificationHistoryRepository.insert_result` 를 직접 호출한다. `CLAUDE.md` rule 5 ("Sender 만 INSERT") + architecture.md Worker 절을 우회. 이유: crawler 가 실패하면 embed/payload 를 만들 수 없어 Sender 큐에 넣을 task 자체가 없는데, history row 가 없으면 `list_pending` 의 LEFT JOIN 가드가 풀리지 않아 매 5초 재시도된다. 정식 정리 후보: `SendDmTask` 에 "이미 실패 확정" 플래그를 두고 Sender 가 그 케이스에선 send 호출을 건너뛰고 history INSERT 만 수행하도록 통합. transit worker 의 SubwayClient 실패 분기도 같은 패턴을 갖게 되면 함께 리팩터.
 
 ## §0. 부트스트랩 (3-PR 분량)

@@ -85,6 +85,18 @@
 - 워크플로: docker-compose.test.yml 기동 + `uv sync` + `uv run ruff check` + `uv run mypy app tests` + `uv run pytest --cov`.
 - 별 PR로 가벼움. 위 어느 작업에든 합쳐도 무방.
 
+### D-4. Refresh JTI Redis TTL 드리프트 (우선순위: 낮음)
+- **현재**: `security.py:register_refresh_jti` 가 TTL 을 `jwt_refresh_expiry_days * 86400` 고정 계산. rotation 시 새 Redis 키가 JWT `exp` 와 ms 단위로 어긋남.
+- **영향**: `decode_token()` 이 JWT 만료를 먼저 검증해 Redis 도달 전에 차단 → 보안 무해, 메모리 미세 낭비뿐.
+- **해결안**: `register_refresh_jti(redis, jti, user_id, exp)` 로 시그니처 변경, TTL = `int(exp) - int(now().timestamp())` 로 계산.
+- **시점**: 메모리 사용 지표가 거슬릴 때. 그 전까지 보류. (PR #10 review)
+
+### D-6. 만료된 refresh 토큰 logout 정책 (우선순위: 낮음)
+- **현재**: `logout()` 이 `decode_token()` 호출 → 만료된 refresh 토큰으로 logout 시 401. 의미상 idempotent 와 어긋남.
+- **영향**: Redis JTI 키는 자동 만료되므로 보안 영향 없음. 사용자 경험만 미세하게 어색.
+- **해결안 후보**: (a) `decode_token` 에 `verify_exp=False` 옵션 추가하고 logout 만 그 옵션 사용, (b) 클라이언트가 토큰 만료 전 logout 하도록 가이드. (a) 는 검증 로직이 보안 경로에 직접 닿으므로 신중. 정책 결정이 먼저.
+- **시점**: 클라이언트 사이드에서 만료 토큰 logout 시도 빈도 측정 후. (PR #10 review)
+
 ### D-5. 정식 on-demand 알림 채널 — `immediate_send_requests`
 - **위치**: `app/domains/immediate_send/` 도메인, `immediate_send_requests` 테이블, `notification_history.immediate_send_request_id` 컬럼, alembic 0005.
 - **역할**: "프론트 버튼 → 백엔드 INSERT → 봇 폴링 → DM" 경로로 알림 종류별 즉시 발송을 제공한다. 컨테이너 경계(PG 매개)를 준수하면서 즉시성을 확보하는 정식 채널이며, 정기 알림 시스템과 별개 경로로 공존한다.
