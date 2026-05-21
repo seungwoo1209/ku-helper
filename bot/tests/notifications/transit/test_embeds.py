@@ -632,3 +632,82 @@ def test_arrival_embed_does_not_contain_raw_messages() -> None:
     value = fields[0]["value"]
     assert "arvlMsg2:" not in value
     assert "arvlMsg3:" not in value
+
+
+# ===========================================================================
+# 디버깅용 recptnDt / barvlDt / effective_seconds 노출 테스트
+# ===========================================================================
+
+
+def test_recurring_embed_contains_received_at_line() -> None:
+    """recurring 임베드 field value 에 'recptnDt: 2026-' 접두 형태의 ISO 타임스탬프가 포함된다."""
+    received_at = datetime(2026, 5, 19, 1, 0, 0, tzinfo=timezone.utc)
+    arr = _make_arrival(arrival_seconds=120, received_at=received_at)
+    embed, _ = build_transit_recurring_embed(
+        station_name="강남",
+        line="2호선",
+        arrivals=[arr],
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    value = fields[0]["value"]
+    assert "recptnDt: 2026-" in value
+
+
+def test_recurring_embed_received_at_none_renders_none() -> None:
+    """received_at=None 이면 recurring 임베드 field value 에 'recptnDt: None' 이 포함된다."""
+    arr = _make_arrival(arrival_seconds=120, received_at=None)
+    embed, _ = build_transit_recurring_embed(
+        station_name="강남",
+        line="2호선",
+        arrivals=[arr],
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    value = fields[0]["value"]
+    assert "recptnDt: None" in value
+
+
+def test_recurring_embed_contains_barvldt_and_effective_seconds() -> None:
+    """recurring 임베드 field value 에 'barvlDt:' 와 'effective_seconds:' 가 둘 다 포함된다."""
+    received_at = _NOW - timedelta(seconds=30)
+    arr = _make_arrival(arrival_seconds=120, received_at=received_at)
+    embed, _ = build_transit_recurring_embed(
+        station_name="강남",
+        line="2호선",
+        arrivals=[arr],
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    value = fields[0]["value"]
+    assert "barvlDt:" in value
+    assert "effective_seconds:" in value
+    # arrival_seconds=120 이므로 raw barvlDt 는 120
+    assert "barvlDt: 120" in value
+    # received_at=now-30s → effective=120-30=90
+    assert "effective_seconds: 90" in value
+
+
+def test_arrival_embed_does_not_contain_received_at_line() -> None:
+    """단발 arrival 임베드 field value 에 'recptnDt:' 가 없다 (recurring 전용 raw 블록)."""
+    received_at = _NOW - timedelta(seconds=30)
+    arr = _make_arrival_single(received_at=received_at)
+    embed, _ = build_transit_arrival_embed(
+        station_name="강남",
+        line="2호선",
+        direction="상행",
+        minutes_before=5,
+        arrival=arr,
+        now=_NOW,
+    )
+    d = embed.to_dict()
+    fields = d.get("fields", [])
+    assert len(fields) == 1
+    value = fields[0]["value"]
+    assert "recptnDt:" not in value
