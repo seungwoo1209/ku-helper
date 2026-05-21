@@ -16,8 +16,8 @@
 - 서울 지하철 API 참고 문서 (커밋 `bb35e19`): `bot/docs/seoul_subway_realtime_arrival_api.md`. SubwayClient 의 필드 매핑·에러 코드·`subwayId` 호선 코드 1차 소스.
 - worker 버그 2건 수정 (커밋 `18668ce`): (1) `cfg.get("interval_minutes")` → `repeat_interval_minutes` 키 교정 — 기존엔 interval 가드가 비활성화돼 매 틱 재발송 위험. (2) UTC 문자열 사전식 비교 → KST `datetime.time` 객체 비교 (`zoneinfo.ZoneInfo("Asia/Seoul")` + `_parse_config_time` helper). 회귀 가드 2건 추가.
 - 실 DM 1건 발송 검증 (2026-05-19 18:24 KST): user_id=1 (`dogbugbaby`) 강남역 2호선 F-07 구독 → `transit_queued` → `dm_sent` → `notification_history` SUCCESS row 1건. 임베드 4 필드(내선/외선 각 2건).
-- §A-3 발송 실패 재시도 (F-21) 완료 (커밋 미정): `RETRY_BACKOFF_SECONDS=(1.0, 2.0)` + `_MAX_ATTEMPTS=3`. `_process_task` 에 retry 루프 추가. INSERT 마지막 1회만. `dm_send_retry`/`dm_failed`/`dm_sent` 로그 키 유지. 회귀 가드 4건 추가.
-- TRANSIT 즉시 발송 종단 (커밋 미정): `ImmediateSendTransitRepository.list_pending` (LEFT JOIN 가드 + ACTIVE 필터 + type=TRANSIT) + `run_immediate_send_transit_job` (lunch 즉시 발송 워커 패턴 미러, SubwayClient 호출 + `build_transit_recurring_embed` 재사용) + `immediate_send_transit_poll` 잡 등록 (5초 인터벌). `lunch_inflight` → `immediate_send_inflight` 로 일반화하여 lunch + transit 즉시 발송 워커가 단일 in-flight 셋을 공유 (request_id 단일 시퀀스라 충돌 없음).
+- §A-3 발송 실패 재시도 (F-21) 완료 (커밋 `0abf864`): `RETRY_BACKOFF_SECONDS=(1.0, 2.0)` + `_MAX_ATTEMPTS=3`. `_process_task` 에 retry 루프 추가. INSERT 마지막 1회만. `dm_send_retry`/`dm_failed`/`dm_sent` 로그 키 유지. 회귀 가드 4건 추가.
+- TRANSIT 즉시 발송 종단 (커밋 `23073a3`): `ImmediateSendTransitRepository.list_pending` (LEFT JOIN 가드 + ACTIVE 필터 + type=TRANSIT) + `run_immediate_send_transit_job` (lunch 즉시 발송 워커 패턴 미러, SubwayClient 호출 + `build_transit_recurring_embed` 재사용) + `immediate_send_transit_poll` 잡 등록 (5초 인터벌). `lunch_inflight` → `immediate_send_inflight` 로 일반화하여 lunch + transit 즉시 발송 워커가 단일 in-flight 셋을 공유 (request_id 단일 시퀀스라 충돌 없음).
 - 테스트: **60 passing** (이전 37 + 즉시 발송 transit 회귀 가드 23: worker 4 + repository 4 + scheduler 1 + 기존 jobs/worker 케이스 확장 14). 신규 파일: `tests/notifications/transit/test_repository.py`.
 - origin/main 머지 (커밋 `e9ddc7f`): frontend 대시보드 + backend `routes/lunch.py` 부채 경로 + `bot/scrapers/` 부채 경로 유입. 백엔드 D-4 부채는 폐기 완료 (backend `routes/`, `data/` 삭제 + `bot/scrapers/` 삭제). 봇 측 D-5 도 정식 채널로 승격 — 알려진 부채 절 참고.
 - LIBRARY 스케줄 알림 종단 (커밋 `5691741`): `LibraryClient`(crawler — name 정규식 `제\s*(\d+)\s*열람실` 파싱 → 번호별 available/total 합산, 0=전체, 모듈 TTL 캐시 15s) + `library/embeds.py`(`build_library_embed`, F-15 긴급 빨강/키워드) + `library/worker.py:run_library_job`(F-13 임계값 평가 + F-14 Redis 상태머신 `library_alert:{user_id}:{room_id}` ∈ above/below, TTL 24h, 발송=큐 적재 시점에 below 갱신). **Redis 신규 도입** — `JobContext.redis_client` 배선(`main.py`), redis_url 미설정 시 잡 skip. `Settings.library_seat_url` + dev 의존성 `fakeredis` 추가. 백엔드 `LibraryConfig.reading_room_id` 는 논리 열람실 번호 Literal[0,1,2,3,5](0=전체 합산, 4 미운영) — A/B 분리·전체 합산은 봇 크롤러가 처리.
@@ -31,7 +31,7 @@
 
 알려진 부채:
 - **Redis 부분 도입 (2026-05-21)**: F-14 도서관 상태머신용으로 `JobContext.redis_client` + lifespan 연결이 추가됨. 단 subway/lunch/restaurants 크롤 캐시는 여전히 모듈 dict 만 사용 — 이들 Redis TTL 캐시 이전·E(F-22) 카운터 등은 후속(§C-1 잔여). 즉시발송 잡은 Redis 미사용.
-- `Dockerfile` / `docker-compose.test.yml` 미작성 — §0-1 잔여. 현재 로컬 `uv run` 으로만 실행. G-3 CI 이전에 필요. Redis 도입으로 dev/test compose 에 redis 서비스도 함께 필요.
+- `docker-compose.test.yml` 미작성 — §0-1 잔여. `Dockerfile` 은 레포 루트에 작성 완료 (`b52d0ee` 외 일련 커밋, python:3.12-slim + uv + Playwright + non-root bot user). 테스트용 compose 는 G-3 CI 이전에 필요. Redis 도입으로 dev/test compose 에 redis 서비스도 함께 필요.
 - alembic 호환성 통합 테스트 1건 미작성 — §0-3 잔여. 백엔드가 만든 스키마 변경이 봇 모델과 어긋나는 회귀를 잡지 못함.
 - DM 채널 캐시 미구현 — 매 발송 `fetch_user + create_dm`. 부하 측정 후 별도 PR.
 - §A-1 의 명시적 429 Retry-After/재시도는 §A-3 로 이관. 현재는 discord.py 내장 핸들러에만 의존.
@@ -51,7 +51,8 @@
 
 ### 0-1. 프로젝트 셋업 (우선순위: 최상) — 부분 완료
 - `pyproject.toml` + `uv.lock` + `.env.example`: 완료. 의존성 + dev 도구 + ruff/mypy 설정 적용.
-- `Dockerfile` (multi-stage, slim base), `docker-compose.test.yml`(`name: ku-helper-bot-test`, 포트 5434): **미작성**. §G-3 CI 진입 전에 작성.
+- `Dockerfile`: **완료** (레포 루트, `b52d0ee` 외 일련 커밋). python:3.12-slim + uv + Playwright chromium + non-root bot user. multi-stage 는 아직 미적용 — 이미지 크기 측정 후 결정.
+- `docker-compose.test.yml`(`name: ku-helper-bot-test`, 포트 5434): **미작성**. §G-3 CI 진입 전에 작성. Redis 서비스도 함께 추가 필요.
 
 ### 0-2. 엔트리포인트 + lifespan (우선순위: 최상) — 완료
 - `app/main.py`: discord.Client + APScheduler + redis(옵셔널) + asyncpg + Sender 큐·워커 셋업/종료.
@@ -77,7 +78,7 @@
 - 이중 가드: 큐에서 꺼낸 시점에 `get_user_status` 재검증. DELETED 또는 사용자 행 없음이면 FAILED + `user_deleted`.
 - Worker → 큐 적재는 §B 부터 — 본 시점에는 큐가 비어 있고 워커 task 만 살아 있다.
 
-### A-3. 발송 실패 재시도 (F-21, 우선순위: 상) — 완료 (커밋 미정)
+### A-3. 발송 실패 재시도 (F-21, 우선순위: 상) — 완료 (커밋 `0abf864`)
 - 지수 백오프 1·2·4초(`RETRY_BACKOFF_SECONDS=(1.0, 2.0)`, `_MAX_ATTEMPTS=3`), 최대 3회. 모든 시도 실패 시 history에 `FAILED` + `failure_reason`.
 - 회귀 가드 테스트 4건: (1) 3회 실패 → FAILED 1 row + send 3회, (2) 2회 실패 후 성공 → SUCCESS 1 row + send 3회, (3) 1회 성공 → sleep 0회, (4) 백오프 sleep 인자 1.0·2.0 검증.
 - 구현 위치: `_process_task` 의 `discord.DiscordException` catch 자리에 retry 루프. INSERT 는 마지막 한 번만.
@@ -115,21 +116,21 @@
 
 ## §C. 점심 알림 — 즉시 발송 종단 우선
 
-### C-1. 정식 Lunch Crawler — 진행 중
+### C-1. 정식 Lunch Crawler — 완료 (커밋 `f87531a`)
 - `app/crawlers/lunch/client.py`: 건국대 학식 페이지 Playwright 크롤링. `LunchMenu`/`LunchCorner` dataclass 반환. 모듈 dict 캐시(ISO 주 단위, asyncio.Lock 가드).
 - lifespan 에서 단일 `playwright`+`chromium Browser` 인스턴스 생성·재사용. 매 호출은 새 context 만 생성·종료.
 - 도메인 예외: `LunchCrawlerFailed` (selector 미일치·timeout 등). raw httpx/Playwright 예외 위로 흘리지 않음.
 - 데이터 소스 URL·selector 는 `app/crawlers/lunch/client.py` 구현 참고 (이전 부채 경로 `bot/scrapers/cafeteria.py` 는 삭제됨 — git 히스토리에서 확인 가능).
 - Redis TTL 캐시는 후속 (Redis 도입 시 키 `lunch:cafeteria:{iso_week}` TTL 7일).
 
-### C-2. 정식 Restaurants Crawler — 진행 중
+### C-2. 정식 Restaurants Crawler — 완료 (커밋 `f87531a`)
 - `app/crawlers/restaurants/client.py`: Naver Local Search API. `Restaurant` dataclass 반환. 카테고리 10건 × 5건 → dedup → 풀.
 - 키 격리: `Settings.naver_search_client_id: str`, `Settings.naver_search_client_secret: SecretStr`.
 - 모듈 dict 캐시(날짜 단위). Redis TTL 캐시는 후속.
 - 도메인 예외: `RestaurantsCrawlerFailed` (HTTP 4xx/5xx).
 - `_QUERIES`·`_normalize`·HTML entity 정제 로직은 git 히스토리의 `bot/scrapers/restaurants.py` (삭제된 부채 경로) 에서 확인 가능. dataclass 래핑·structlog 추가·`Settings` 키 사용으로 재작성.
 
-### C-3. 즉시 발송 Lunch Worker — 진행 중
+### C-3. 즉시 발송 Lunch Worker — 완료 (커밋 `f87531a`)
 - `app/notifications/lunch/worker.py:run_immediate_send_lunch_job`: 5초 간격 폴링. `immediate_send_requests` (type=LUNCH, status=ACTIVE 사용자, history join 으로 미발송) 픽업.
 - 각 row 별 `asyncio.gather(LunchClient.fetch_today_menu(), RestaurantsClient.fetch_pool())` 병렬 호출 → `random.sample(pool, 3)` → `build_lunch_immediate_embed` → Sender 큐 적재.
 - in-flight set 으로 같은 틱 중복 적재 방지. history INSERT 후 sender 가 set 에서 discard. transit F-07 패턴 재사용.
@@ -195,11 +196,11 @@
 
 **§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (완료) → TRANSIT 즉시 발송 (완료) → §D (완료, LIBRARY 정기+즉시발송) → §B-2a (F-06 arrival, 완료) → §C-4 → §E → §F → §G**
 
-남은 우선 작업: §E(F-22 관리자 알림), §B-4(F-08 혼잡도 — arvlCd 라벨은 부분 완료), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(Dockerfile·CI·health check), subway/lunch Redis 캐시 이전.
+남은 우선 작업: §E(F-22 관리자 알림), §B-4(F-08 혼잡도 — arvlCd 라벨은 부분 완료), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(docker-compose.test.yml·CI·health check), subway/lunch Redis 캐시 이전.
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 
-병행 가능 항목 (§A-3 와 충돌하지 않음):
-- §0-1 잔여: `Dockerfile` / `docker-compose.test.yml` — §G-3 CI 와 같은 PR로 묶어도 무방.
+병행 가능 잔여 항목:
+- §0-1 잔여: `docker-compose.test.yml` — §G-3 CI 와 같은 PR로 묶어도 무방. (`Dockerfile` 은 완료)
 - §0-3 잔여: alembic 호환성 통합 테스트 1건.
-- §C-1 (Lunch Crawler) + §C-2 (Restaurants Crawler) 진행 중 — §A-3 완료 이후 즉시 착수. §C-3 즉시 발송 worker 는 §C-1·C-2 완료 후 진행.
+- subway/lunch/restaurants Redis TTL 캐시 이전(§C-1 잔여 + 부채 절 참고).
