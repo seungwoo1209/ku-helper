@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-21 — F-06 TRANSIT 단발 도착 알림 종단 완료. 백엔드 `_TransitArrival` 에 `direction Literal["상행","하행","내선","외선"]` + `start_time`/`end_time` 윈도우 추가(커밋 `dcb5ab2`). 봇 `run_transit_job` 의 `mode == "arrival"` 분기 신설(`_process_arrival_subscription` helper): 윈도우 안에서 line/direction 매칭 + `effective_seconds ≤ minutes_before*60` 인 모든 열차를 train_no 단위로 1회씩 발송. Redis SET `transit_arrival_sent:{notification_id}:{kst_date}` TTL 28h 로 train_no 중복 방지. `build_transit_arrival_embed` 신규(헬퍼는 recurring 빌더와 공용). 테스트 118 → 129 (+11). 이전: TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
+마지막 갱신: 2026-05-21 — 크롤러 4종 Redis TTL 캐시 이전 완료(브랜치 `feat/caching`). 모듈 dict 캐시 + asyncio.Lock 폐기. `JobContext.redis_client` 가 Optional → required 로 승격(`main.py` 가 redis ping 실패 시 부팅 차단). 신규 키: `subway:arrivals:{station_name}` TTL 30s, `lunch:menu:{iso_week}` TTL 7d, `restaurants:pool:{YYYY-MM-DD}` TTL 24h, `library:rooms:{sha1(url)[:12]}` TTL 15s. 4개 크롤러 모두 `__init__(http_client, settings, redis)` 시그니처로 통일 + dataclass↔JSON 직렬화 헬퍼 `_deserialize_*` 모듈 내부 전용. SETEX race 는 같은 값 덮어쓰기라 무해 → 분산락 미도입(KISS). 이전: F-06 TRANSIT 단발 도착 알림 종단 완료(백엔드 커밋 `dcb5ab2`). TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
 
 ## 진행 상황 스냅샷
 
@@ -30,21 +30,20 @@
 - F-22 관리자 알림 분담(봇 단독 vs 백엔드 분담) — 미정.
 
 알려진 부채:
-- **Redis 부분 도입 (2026-05-21)**: F-14 도서관 상태머신용으로 `JobContext.redis_client` + lifespan 연결이 추가됨. 단 subway/lunch/restaurants 크롤 캐시는 여전히 모듈 dict 만 사용 — 이들 Redis TTL 캐시 이전·E(F-22) 카운터 등은 후속(§C-1 잔여). 즉시발송 잡은 Redis 미사용.
+- **Redis 도입 정착 (2026-05-21)**: `JobContext.redis_client` 가 required. F-14 도서관 상태머신 + F-06 단발 도착 dedup + 크롤러 4종 TTL 캐시(subway/lunch/restaurants/library) 가 모두 Redis 사용. 잔여: E(F-22) 크롤러 실패 카운터·관리자 알림 쿨다운(§E). 즉시발송 잡은 Redis 미사용 — `notification_history.immediate_send_request_id` partial unique 인덱스가 DB 단에서 dedup 보장하므로 메모리 set 으로 충분(KISS).
 - `docker-compose.test.yml` 미작성 — §0-1 잔여. `Dockerfile` 은 레포 루트에 작성 완료 (`b52d0ee` 외 일련 커밋, python:3.12-slim + uv + Playwright + non-root bot user). 테스트용 compose 는 G-3 CI 이전에 필요. Redis 도입으로 dev/test compose 에 redis 서비스도 함께 필요.
 - alembic 호환성 통합 테스트 1건 미작성 — §0-3 잔여. 백엔드가 만든 스키마 변경이 봇 모델과 어긋나는 회귀를 잡지 못함.
 - DM 채널 캐시 미구현 — 매 발송 `fetch_user + create_dm`. 부하 측정 후 별도 PR.
 - §A-1 의 명시적 429 Retry-After/재시도는 §A-3 로 이관. 현재는 discord.py 내장 핸들러에만 의존.
 - Sender 워커가 `discord.DiscordException` 하위 전체를 동일 FAILED 로 처리 — `Forbidden`/`NotFound` 분기는 요구 시 추가.
 - F-07 발송 중복 방지가 메모리 set 의존 — 봇 재기동 시 첫 틱에서 history 가드만으로 보호. Redis 도입(§C-1) 시 분산 가능.
-- SubwayClient 가 Redis 캐시 없이 매 5초 틱마다 외부 API 호출. 같은 station 의 구독은 한 틱 내 dict 캐시로 호출 1회로 합쳐짐. 본격 부하 시 Redis TTL 캐시(§C-1) 도입.
 - 봇이 `notification.config` 를 raw `dict` 로 읽음 — Pydantic 검증 없음. 백엔드 스키마 키 이름 변경이 워커에서 silently fail 가능 (실제로 `repeat_interval_minutes` ↔ `interval_minutes` 회귀 발생). 후속 정리: `app/notifications/transit/config_parsers.py` 같은 봇 측 Pydantic 모델 도입 또는 backend 와 schema 공유 패키지.
 - transit 윈도우 비교가 KST 고정 (`zoneinfo.ZoneInfo("Asia/Seoul")`). 다국가 확장 시 사용자별 timezone 컬럼 필요 — 현재 단일 캠퍼스 한정이라 보류.
 - 학식 크롤러가 Playwright 의존 — 봇 컨테이너 이미지 크기 ↑. 추후 부하 측정 후 별도 컨테이너로 분리 검토.
 - 즉시 발송 dedupe 는 `notification_history.immediate_send_request_id` FK 의존 — 봇은 SELECT 만, UPDATE 권한 없음. 백엔드 roadmap §D-5 (정식 on-demand 채널) 와 같은 라이프사이클.
 - 즉시 발송 lunch/transit 워커가 `ImmediateSendRequestRow` dataclass 를 `bot/app/notifications/lunch/repository.py` 에서 공유한다. 알림 종류별 payload 검증이 필요해지는 시점에 `app/notifications/repository.py` 또는 `app/notifications/immediate_send/` 공통 모듈로 이전한다. 현재는 LIBRARY 즉시 발송 추가 시 같은 패턴을 따르면 충분.
 - `immediate_send_inflight` 메모리 셋 — 봇 재기동 시 비워진다. 같은 request_id 가 두 번 처리되는 회귀는 `notification_history.immediate_send_request_id` partial unique 인덱스 + LEFT JOIN 가드로 INSERT 단계에서 막힌다 (DM 자체가 두 번 발송될 가능성은 거의 없음 — 5초 폴링 간격 내 재기동만 위험).
-- Lunch/Restaurants 크롤러가 Redis 캐시 없이 모듈 dict 캐시만 사용. 봇 재기동 시 첫 요청에서 재크롤링. §C-1 정식 일정에 Redis 캐시 추가.
+- **크롤러 TTL 코드 하드코딩** — `subway:arrivals` 30s, `lunch:menu` 7d, `restaurants:pool` 24h, `library:rooms` 15s 가 각 크롤러 모듈 상수로 박혀 있다. 운영 중 조정하려면 코드 변경 + 재배포 필요. 부하·신선도 SLA 측정 후 `Settings` 의 명시 키(`subway_cache_ttl_seconds` 등)로 이전 검토. (PR #10 review)
 - **아키텍처 예외: Lunch worker 직접 FAILED INSERT** — `app/notifications/lunch/worker.py` 의 crawler 실패 분기에서 워커가 `NotificationHistoryRepository.insert_result` 를 직접 호출한다. `CLAUDE.md` rule 5 ("Sender 만 INSERT") + architecture.md Worker 절을 우회. 이유: crawler 가 실패하면 embed/payload 를 만들 수 없어 Sender 큐에 넣을 task 자체가 없는데, history row 가 없으면 `list_pending` 의 LEFT JOIN 가드가 풀리지 않아 매 5초 재시도된다. 정식 정리 후보: `SendDmTask` 에 "이미 실패 확정" 플래그를 두고 Sender 가 그 케이스에선 send 호출을 건너뛰고 history INSERT 만 수행하도록 통합. transit worker 의 SubwayClient 실패 분기도 같은 패턴을 갖게 되면 함께 리팩터.
 
 ## §0. 부트스트랩 (3-PR 분량)
@@ -85,9 +84,9 @@
 
 ## §B. 첫 알림 흐름 — 교통 (가장 단순한 단일 경로)
 
-### B-1. Subway Crawler — 완료 (커밋 `6703ded`)
+### B-1. Subway Crawler — 완료 (커밋 `6703ded` + Redis 캐시 이전 `feat/caching`)
 - `app/crawlers/subway/client.py`: 서울 공공 API 호출. 응답을 `SubwayArrival` dataclass로 정규화. raw dict 반환 금지.
-- Redis TTL 캐시(키 `subway:{station}:{line}`, TTL 30초)는 **미적용** — §C-1 Redis 도입 후 추가.
+- Redis TTL 캐시: 키 `subway:arrivals:{station_name}`, TTL 30s. 5초 폴링 × 6틱이 한 캐시 슬롯 내 동일 응답 공유.
 - API 키는 `Settings.subway_api_key: SecretStr` 로 격리. URL 로그 출력 시 마스킹.
 
 ### B-2. Transit Worker — 부분 완료 (커밋 `6703ded` + 버그 수정 `18668ce` + 임베드 고도화 `c9e4985`)
@@ -100,7 +99,6 @@
 - 백엔드 `_TransitArrival` 확장: `direction Literal["상행","하행","내선","외선"]` + `start_time`/`end_time` 추가 + `_start_before_end` validator. 회귀 가드 8건 (전 4 direction + invalid direction 거절 + start>=end 거절 + minutes_before 누락 등).
 - 봇 `run_transit_job` 에 `mode == "arrival"` 분기 + `_process_arrival_subscription` helper.
 - 매 틱: 윈도우 진입 시 Redis SET 키 `transit_arrival_sent:{notification_id}:{kst_date}` SMEMBERS → API 도착 목록 filter(line/direction/`effective_seconds ≤ minutes_before*60`/`train_no ∉ sent_set`) → 통과한 모든 열차에 대해 SADD + EXPIRE NX(28h) + 큐 적재. `ctx.in_flight_notification_ids` 미사용(같은 notification 의 서로 다른 train_no 가 동일 틱에 잡힐 수 있어야 정상).
-- `ctx.redis_client is None` 이면 arrival 분기 skip + warn 로그(recurring 분기는 영향 X) — LIBRARY 와 동일 패턴.
 - `build_transit_arrival_embed` 신규: 제목 `⏰ {station} {line} {direction} 도착 임박`, description `{N}분 전 알림`, 1 필드(`_format_minutes_label` + `_build_field_value` 재사용). payload 에 `train_no`/`direction`/`minutes_before` 포함.
 - 알려진 부채: direction 매칭이 API `updnLine` raw 문자열 비교라 공공 API 표기 변경 시 silent fail. 호선별 매핑 테이블은 의도적으로 추가하지 않음(KISS) — 백엔드 Literal 과 raw 가 분기되는 시점에 재검토.
 
@@ -116,17 +114,17 @@
 
 ## §C. 점심 알림 — 즉시 발송 종단 우선
 
-### C-1. 정식 Lunch Crawler — 완료 (커밋 `f87531a`)
-- `app/crawlers/lunch/client.py`: 건국대 학식 페이지 Playwright 크롤링. `LunchMenu`/`LunchCorner` dataclass 반환. 모듈 dict 캐시(ISO 주 단위, asyncio.Lock 가드).
+### C-1. 정식 Lunch Crawler — 완료 (커밋 `f87531a` + Redis 캐시 이전 `feat/caching`)
+- `app/crawlers/lunch/client.py`: 건국대 학식 페이지 Playwright 크롤링. `LunchMenu`/`LunchCorner` dataclass 반환.
+- Redis TTL 캐시: 키 `lunch:menu:{iso_week}` TTL 7d. 주간 메뉴 1회 크롤 후 주 단위 재사용. 모듈 dict 캐시·asyncio.Lock 폐기.
 - lifespan 에서 단일 `playwright`+`chromium Browser` 인스턴스 생성·재사용. 매 호출은 새 context 만 생성·종료.
 - 도메인 예외: `LunchCrawlerFailed` (selector 미일치·timeout 등). raw httpx/Playwright 예외 위로 흘리지 않음.
 - 데이터 소스 URL·selector 는 `app/crawlers/lunch/client.py` 구현 참고 (이전 부채 경로 `bot/scrapers/cafeteria.py` 는 삭제됨 — git 히스토리에서 확인 가능).
-- Redis TTL 캐시는 후속 (Redis 도입 시 키 `lunch:cafeteria:{iso_week}` TTL 7일).
 
-### C-2. 정식 Restaurants Crawler — 완료 (커밋 `f87531a`)
+### C-2. 정식 Restaurants Crawler — 완료 (커밋 `f87531a` + Redis 캐시 이전 `feat/caching`)
 - `app/crawlers/restaurants/client.py`: Naver Local Search API. `Restaurant` dataclass 반환. 카테고리 10건 × 5건 → dedup → 풀.
 - 키 격리: `Settings.naver_search_client_id: str`, `Settings.naver_search_client_secret: SecretStr`.
-- 모듈 dict 캐시(날짜 단위). Redis TTL 캐시는 후속.
+- Redis TTL 캐시: 키 `restaurants:pool:{YYYY-MM-DD}` TTL 24h. 일 1회 외부 호출. 모듈 dict 캐시 폐기.
 - 도메인 예외: `RestaurantsCrawlerFailed` (HTTP 4xx/5xx).
 - `_QUERIES`·`_normalize`·HTML entity 정제 로직은 git 히스토리의 `bot/scrapers/restaurants.py` (삭제된 부채 경로) 에서 확인 가능. dataclass 래핑·structlog 추가·`Settings` 키 사용으로 재작성.
 
@@ -142,8 +140,9 @@
 
 ## §D. 도서관 알림 + F-14 상태 기반 중복 방지 — 완료 (커밋 `5691741`, 즉시발송 `4f89342`)
 
-### D-1. Library Crawler — 완료
-- `app/crawlers/library/client.py`: 좌석 API(JSON) GET → name 정규식 파싱으로 논리 번호별 합산. `RoomSeats` dataclass 반환. 모듈 TTL 캐시(15s, asyncio.Lock). `Settings.library_seat_url` 미설정 시 `LibraryCrawlerFailed`. Redis TTL 캐시는 후속(§C-1).
+### D-1. Library Crawler — 완료 (Redis 캐시 이전 `feat/caching`)
+- `app/crawlers/library/client.py`: 좌석 API(JSON) GET → name 정규식 파싱으로 논리 번호별 합산. `RoomSeats` dataclass 반환. `Settings.library_seat_url` 미설정 시 `LibraryCrawlerFailed`.
+- Redis TTL 캐시: 키 `library:rooms:{sha1(url)[:12]}` TTL 15s. F-13 30s SLA 안에서 외부호출 빈도 ↓. 모듈 TTL+asyncio.Lock 캐시 폐기.
 
 ### D-2. 상태 기반 중복 방지 (F-14) — 완료
 - Redis 키 `library_alert:{user_id}:{room_id}` ∈ {`above`, `below`}, TTL 24h.
@@ -196,11 +195,10 @@
 
 **§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (완료) → TRANSIT 즉시 발송 (완료) → §D (완료, LIBRARY 정기+즉시발송) → §B-2a (F-06 arrival, 완료) → §C-4 → §E → §F → §G**
 
-남은 우선 작업: §E(F-22 관리자 알림), §B-4(F-08 혼잡도 — arvlCd 라벨은 부분 완료), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(docker-compose.test.yml·CI·health check), subway/lunch Redis 캐시 이전.
+남은 우선 작업: §E(F-22 관리자 알림), §B-4(F-08 혼잡도 — arvlCd 라벨은 부분 완료), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(docker-compose.test.yml·CI·health check).
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 
 병행 가능 잔여 항목:
 - §0-1 잔여: `docker-compose.test.yml` — §G-3 CI 와 같은 PR로 묶어도 무방. (`Dockerfile` 은 완료)
 - §0-3 잔여: alembic 호환성 통합 테스트 1건.
-- subway/lunch/restaurants Redis TTL 캐시 이전(§C-1 잔여 + 부채 절 참고).

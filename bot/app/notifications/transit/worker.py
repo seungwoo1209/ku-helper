@@ -66,7 +66,7 @@ async def run_transit_job(ctx: JobContext) -> None:
     now = datetime.now(tz=timezone.utc)
     # 윈도우 비교는 KST 기준. UTC now 는 interval 계산에도 그대로 사용.
     now_kst_time = now.astimezone(_DISPLAY_TIMEZONE).time()
-    subway_client = SubwayClient(ctx.http_client, ctx.settings)
+    subway_client = SubwayClient(ctx.http_client, ctx.settings, redis=ctx.redis_client)
 
     async with ctx.session_maker() as session:
         repo = NotificationRepository(session)
@@ -275,14 +275,7 @@ async def _process_arrival_subscription(
         )
         return
 
-    # Redis 필수 — 없으면 arrival 분기 skip.
     redis = ctx.redis_client
-    if redis is None:
-        _logger.warning(
-            "transit_arrival_skip_no_redis",
-            notification_id=notification.id,
-        )
-        return
 
     # 오늘 KST 날짜 기준으로 sent set 키 생성.
     kst_date = now.astimezone(_DISPLAY_TIMEZONE).date().isoformat()
@@ -374,7 +367,7 @@ async def run_immediate_send_transit_job(ctx: JobContext) -> None:
     history row 없이 LEFT JOIN 가드가 풀리지 않아 매 5초 재시도되기 때문. lunch 워커와 동일.
     정식 정리 후보: SendDmTask 에 "이미 실패" 플래그를 두고 Sender 가 INSERT 만 수행.
     """
-    subway_client = SubwayClient(ctx.http_client, ctx.settings)
+    subway_client = SubwayClient(ctx.http_client, ctx.settings, redis=ctx.redis_client)
     now = datetime.now(tz=timezone.utc)
 
     try:

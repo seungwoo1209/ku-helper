@@ -29,6 +29,8 @@ _EXPECTED_INTERVAL_SECONDS = {
 @pytest.fixture
 def job_ctx() -> JobContext:
     """dummy JobContext 픽스처 — 잡 등록 검증에서만 사용, 실제 실행 안 함."""
+    import fakeredis.aioredis
+
     settings = MagicMock()
     settings.subway_api_key = SecretStr("test-key")
 
@@ -37,6 +39,7 @@ def job_ctx() -> JobContext:
         http_client=httpx.AsyncClient(),
         session_maker=MagicMock(),
         settings=settings,
+        redis_client=fakeredis.aioredis.FakeRedis(decode_responses=True),
         in_flight_notification_ids=set(),
     )
 

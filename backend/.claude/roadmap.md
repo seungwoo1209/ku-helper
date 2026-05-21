@@ -4,7 +4,7 @@
 현재 봇 컨테이너 작업이 우선이라 잠시 보류 중이지만, 백엔드 PR을 다시 시작할 때
 **여기서부터 읽어서 컨텍스트를 복구**할 것.
 
-마지막 갱신: 2026-05-21 — F-06 TRANSIT 단발 알림 스키마 확장(커밋 `dcb5ab2`). `_TransitArrival` 에 `direction: Literal["상행","하행","내선","외선"]` + `start_time`/`end_time` 윈도우 + `_start_before_end` validator 추가. 봇 측 종단(arrival 분기 + Redis SET train_no 중복 방지)도 같은 PR 에서 완료. 이전: `POST /api/v1/me/immediate-send/library` 추가, `LibraryConfig.reading_room_id` Literal[0,1,2,3,5] 로 확정.
+마지막 갱신: 2026-05-21 — C-1 Redis 인프라 + C-2 refresh/logout(whitelist) + OAuth state 1회용화 완료. `Settings.redis_url`(required) + `app/core/redis.py`(`create_redis_client`) + lifespan 에 `app.state.redis` 도입. `security.py` 에 `register_refresh_jti` / `revoke_refresh_jti` / `assert_refresh_jti_active` 3개 헬퍼 + `create_refresh_token` 시그니처 변경(`tuple[str, str]` 반환). `AuthService.__init__` 에 redis 주입, `handle_callback` 이 발급 직후 jti SETEX(TTL = `jwt_refresh_expiry_days * 86400`). 신규 `POST /api/v1/auth/refresh`(rotation: old jti DEL → new jti SET) + `POST /api/v1/auth/logout`(jti DEL, idempotent 204). 라우터 prefix `/auth/discord` → `/auth` 변경(엔드포인트 URL 유지: `/auth/discord/login`, `/auth/discord/callback`, 신규 `/auth/refresh`, `/auth/logout`). OAuth state 1회용화: `verify_state_token` 시그니처 `-> dict[str, Any]` 로 확장, 신규 `consume_state_jti(redis, jti)` 가 `state_used:{jti}` SET NX EX `jwt_state_expiry_minutes*60` — `handle_callback` 이 state 검증 직후 호출해 같은 state 두 번째 콜백을 401 로 차단(replay 가 Discord 외부 호출까지 새지 않는 회귀 가드 포함). 테스트 56 → 62(+6: refresh 5건 + state replay 1건). conftest 에 fakeredis `redis_client` 픽스처 + `app.state.redis` 오버라이드. 이전: F-06 TRANSIT 단발 알림 스키마 확장(커밋 `dcb5ab2`).
 
 ## 진행 상황 스냅샷
 
@@ -48,19 +48,20 @@
 
 ## C. 인프라 / 보안 결정
 
-### C-1. Redis 도입  (우선순위: 높음, C-2 풀리려면 선행 필요)
-- **architecture.md 명시**: state 토큰·캐시·쿨다운·관리자 알림 dedupe.
-- **현재 격차**: state 토큰은 JWT(stateless)로 구현 중. 캐시는 없음.
-- **단계**:
-  1. `Settings.redis_url` 추가 + `docker-compose-dev.yml`에 redis 서비스.
-  2. lifespan에서 `redis.asyncio.from_url` 클라이언트 생성·종료.
-  3. OAuth state 토큰을 Redis로 이전 (TTL 5분). 단, JWT 방식 그대로 두고 캐시·블랙리스트만 Redis로 갈 수도 있음 — 비용/장애 면 검토.
+### C-1. Redis 도입  — 완료 (refresh whitelist + state 1회용화 + 봇 크롤러 캐시 4종)
+- 완료: `Settings.redis_url`(required) + `app/core/redis.py` + lifespan(`app.state.redis`) + `redis>=5.0` / dev `fakeredis>=2.20`.
+- 사용처:
+  - `refresh_jti:{jti}` TTL 30d — refresh token whitelist (C-2).
+  - `state_used:{jti}` TTL `jwt_state_expiry_minutes*60` — OAuth state 1회용 잠금. `consume_state_jti` 가 SET NX 으로 잠그며 두 번째 콜백은 NX 실패로 401.
+  - 봇 측 크롤러 4종 + F-14 도서관 상태머신 + F-06 단발 도착 dedup 은 bot roadmap §C-1 참고.
+- **후속 작업**:
+  - `infra/docker-compose-*.yml` 류에 redis 서비스 정식 추가 (현재 dev/test compose 는 backend/ 하위에 있고 redis 서비스 부재 — 호스트 redis 가정).
 
-### C-2. F-02 로그아웃 / F-05 토큰 갱신  (C-1 이후)
-- `POST /api/v1/auth/refresh`: refresh 토큰 검증 → 새 access 발급.
-- `POST /api/v1/auth/logout`: refresh `jti`를 Redis 블랙리스트에 등록 (TTL = 남은 만료).
-- `decode_token`에서 블랙리스트 확인 단계 추가.
-- 테스트: respx 무관 (외부 호출 없음), 단위·통합 둘 다 가능.
+### C-2. F-02 로그아웃 / F-05 토큰 갱신  — 완료
+- `POST /api/v1/auth/refresh`: refresh JWT 검증 → jti whitelist 확인 → rotation(old DEL + new SET) → 새 access/refresh 발급.
+- `POST /api/v1/auth/logout`: refresh jti 를 Redis whitelist 에서 DEL (idempotent 204).
+- Access 토큰은 stateless 유지 — 별도 블랙리스트 미도입(만료 30분으로 짧음). 즉시 차단이 필요해지면 별 PR.
+- 회귀 가드 5건: rotation·재사용 차단·만료 거절·logout 후 refresh 401·logout idempotent.
 
 ## D. 알려진 부채·잠재 회귀
 
@@ -83,6 +84,18 @@
 - GitHub Actions 미구성. 매 PR 수동 검증 중.
 - 워크플로: docker-compose.test.yml 기동 + `uv sync` + `uv run ruff check` + `uv run mypy app tests` + `uv run pytest --cov`.
 - 별 PR로 가벼움. 위 어느 작업에든 합쳐도 무방.
+
+### D-4. Refresh JTI Redis TTL 드리프트 (우선순위: 낮음)
+- **현재**: `security.py:register_refresh_jti` 가 TTL 을 `jwt_refresh_expiry_days * 86400` 고정 계산. rotation 시 새 Redis 키가 JWT `exp` 와 ms 단위로 어긋남.
+- **영향**: `decode_token()` 이 JWT 만료를 먼저 검증해 Redis 도달 전에 차단 → 보안 무해, 메모리 미세 낭비뿐.
+- **해결안**: `register_refresh_jti(redis, jti, user_id, exp)` 로 시그니처 변경, TTL = `int(exp) - int(now().timestamp())` 로 계산.
+- **시점**: 메모리 사용 지표가 거슬릴 때. 그 전까지 보류. (PR #10 review)
+
+### D-6. 만료된 refresh 토큰 logout 정책 (우선순위: 낮음)
+- **현재**: `logout()` 이 `decode_token()` 호출 → 만료된 refresh 토큰으로 logout 시 401. 의미상 idempotent 와 어긋남.
+- **영향**: Redis JTI 키는 자동 만료되므로 보안 영향 없음. 사용자 경험만 미세하게 어색.
+- **해결안 후보**: (a) `decode_token` 에 `verify_exp=False` 옵션 추가하고 logout 만 그 옵션 사용, (b) 클라이언트가 토큰 만료 전 logout 하도록 가이드. (a) 는 검증 로직이 보안 경로에 직접 닿으므로 신중. 정책 결정이 먼저.
+- **시점**: 클라이언트 사이드에서 만료 토큰 logout 시도 빈도 측정 후. (PR #10 review)
 
 ### D-5. 정식 on-demand 알림 채널 — `immediate_send_requests`
 - **위치**: `app/domains/immediate_send/` 도메인, `immediate_send_requests` 테이블, `notification_history.immediate_send_request_id` 컬럼, alembic 0005.
@@ -112,6 +125,6 @@
 
 ## 권장 순서
 
-**B-1 (require_role) → A-2 (jwt 길이) → D-1 (get_current_user 리팩터) → C-1 (Redis) → C-2 (로그아웃/refresh) → B-2 (활성 시간대, 봇 합의 후) → D-2 (alembic 왕복) → D-3 (CI) → A-1 (PATCH /me) → E-* (봇 합의 후)**
+**~~C-1 (Redis)~~ → ~~C-2 (로그아웃/refresh)~~ → ~~OAuth state Redis 단발성 전환~~ → B-1 (require_role) → A-2 (jwt 길이) → D-1 (get_current_user 리팩터) → B-2 (활성 시간대, 봇 합의 후) → D-2 (alembic 왕복) → D-3 (CI) → A-1 (PATCH /me) → E-* (봇 합의 후)**
 
 봇 컨테이너 작업과 병행할 때 가장 충돌이 적은 영역은 **B-1 / A-2 / D-1 / D-3**.

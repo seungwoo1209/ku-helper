@@ -138,13 +138,20 @@ def _make_ctx(
     settings = MagicMock()
     settings.subway_api_key = SecretStr("test-key")
 
+    # redis_client 는 필수. None 이 전달되면 fakeredis 로 대체한다.
+    r = (
+        redis_client
+        if redis_client is not None
+        else fakeredis.aioredis.FakeRedis(decode_responses=True)
+    )
+
     return JobContext(
         queue=queue or asyncio.Queue(),
         http_client=httpx.AsyncClient(),
         session_maker=_FakeSessionMaker(),  # type: ignore[arg-type]
         settings=settings,
+        redis_client=r,
         in_flight_notification_ids=in_flight if in_flight is not None else set(),
-        redis_client=redis_client,
     )
 
 
@@ -198,7 +205,7 @@ async def test_recurring_no_history_enqueues_task(
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: fake_client,
+            lambda http_client, settings, redis: fake_client,
         )
 
         await run_transit_job(ctx)
@@ -252,7 +259,7 @@ async def test_recurring_recent_history_skips(monkeypatch: pytest.MonkeyPatch) -
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: fake_client,
+            lambda http_client, settings, redis: fake_client,
         )
 
         await run_transit_job(ctx)
@@ -345,55 +352,7 @@ async def test_recurring_after_window_skips(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 # ---------------------------------------------------------------------------
-# 케이스 5: mode == "arrival" + redis_client None → skip (warn 로그, 큐 비어 있음)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@time_machine.travel(_FIXED_KST, tick=False)
-async def test_arrival_mode_no_redis_skips(monkeypatch: pytest.MonkeyPatch) -> None:
-    """mode == 'arrival' + redis_client=None → transit_arrival_skip_no_redis warn, 큐 0건."""
-    notif = _FakeNotification(
-        id=14,
-        user_id=1,
-        type=NotificationType.TRANSIT,
-        enabled=True,
-        config={
-            "mode": "arrival",
-            "station_name": "강남",
-            "line": "2호선",
-            "direction": "상행",
-            "start_time": "09:00:00",
-            "end_time": "11:00:00",
-            "minutes_before": 5,
-        },
-    )
-    user = _FakeUser(id=1, discord_id=9999)
-
-    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
-    ctx = _make_ctx(queue=queue, redis_client=None)
-
-    with monkeypatch.context() as m:
-        m.setattr(
-            "app.notifications.transit.worker.NotificationRepository",
-            lambda session: _FakeNotificationRepo([(notif, user)]),
-        )
-        m.setattr(
-            "app.notifications.transit.worker.NotificationHistoryRepository",
-            lambda session: _FakeHistoryRepo(last_sent_at=None),
-        )
-        m.setattr(
-            "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: _FakeSubwayClient([_make_arrival()], []),
-        )
-
-        await run_transit_job(ctx)
-
-    assert queue.qsize() == 0
-
-
-# ---------------------------------------------------------------------------
-# 케이스 6: 같은 station 다른 line 구독 2건 → fetch_arrivals 1회만 호출
+# 케이스 5(원 케이스 6): 같은 station 다른 line 구독 2건 → fetch_arrivals 1회만 호출
 # ---------------------------------------------------------------------------
 
 
@@ -463,7 +422,7 @@ async def test_same_station_fetches_once(monkeypatch: pytest.MonkeyPatch) -> Non
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: fake_client,
+            lambda http_client, settings, redis: fake_client,
         )
 
         await run_transit_job(ctx)
@@ -513,7 +472,7 @@ async def test_api_unavailable_swallowed_queue_empty(
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: _RaisingSubwayClient(),
+            lambda http_client, settings, redis: _RaisingSubwayClient(),
         )
 
         # 예외가 전파되지 않아야 한다 (swallow).
@@ -570,7 +529,7 @@ async def test_regression_repeat_interval_minutes_key_is_respected(
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: fake_client,
+            lambda http_client, settings, redis: fake_client,
         )
 
         await run_transit_job(ctx)
@@ -631,7 +590,7 @@ async def test_regression_window_comparison_uses_kst(
             )
             m.setattr(
                 "app.notifications.transit.worker.SubwayClient",
-                lambda http_client, settings: fake_client,
+                lambda http_client, settings, redis: fake_client,
             )
 
             await run_transit_job(ctx)
@@ -667,6 +626,7 @@ def _make_immediate_ctx(
         http_client=httpx.AsyncClient(),
         session_maker=MagicMock(),
         settings=settings,
+        redis_client=fakeredis.aioredis.FakeRedis(decode_responses=True),
         in_flight_notification_ids=set(),
         immediate_send_inflight=inflight if inflight is not None else set(),
     )
@@ -742,7 +702,7 @@ async def test_immediate_transit_happy_path_enqueues_task(
     )
     monkeypatch.setattr(
         "app.notifications.transit.worker.SubwayClient",
-        lambda http_client, settings: _FakeSubwayClient([_make_arrival()], []),
+        lambda http_client, settings, redis: _FakeSubwayClient([_make_arrival()], []),
     )
     ctx.session_maker.return_value.__aenter__.return_value = fake_session  # type: ignore[attr-defined]
     ctx.session_maker.return_value.__aexit__.return_value = False  # type: ignore[attr-defined]
@@ -792,7 +752,7 @@ async def test_immediate_transit_skips_inflight_row(
     )
     monkeypatch.setattr(
         "app.notifications.transit.worker.SubwayClient",
-        lambda http_client, settings: _CountingClient(),
+        lambda http_client, settings, redis: _CountingClient(),
     )
     ctx.session_maker.return_value.__aenter__.return_value = fake_session  # type: ignore[attr-defined]
     ctx.session_maker.return_value.__aexit__.return_value = False  # type: ignore[attr-defined]
@@ -832,7 +792,7 @@ async def test_immediate_transit_api_unavailable_inserts_failed_history(
     )
     monkeypatch.setattr(
         "app.notifications.transit.worker.SubwayClient",
-        lambda http_client, settings: _RaisingSubwayClient(),
+        lambda http_client, settings, redis: _RaisingSubwayClient(),
     )
     ctx.session_maker.return_value.__aenter__.return_value = fake_session  # type: ignore[attr-defined]
     ctx.session_maker.return_value.__aexit__.return_value = False  # type: ignore[attr-defined]
@@ -889,7 +849,7 @@ async def test_immediate_transit_deleted_user_excluded_at_list_pending(
     )
     monkeypatch.setattr(
         "app.notifications.transit.worker.SubwayClient",
-        lambda http_client, settings: _CountingClient(),
+        lambda http_client, settings, redis: _CountingClient(),
     )
     ctx.session_maker.return_value.__aenter__.return_value = fake_session  # type: ignore[attr-defined]
     ctx.session_maker.return_value.__aexit__.return_value = False  # type: ignore[attr-defined]
@@ -984,7 +944,7 @@ async def test_arrival_happy_path_enqueues_two_trains(
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+            lambda http_client, settings, redis: _FakeSubwayClient(arrivals, []),
         )
 
         await run_transit_job(ctx)
@@ -1039,7 +999,7 @@ async def test_arrival_already_sent_train_skipped(
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+            lambda http_client, settings, redis: _FakeSubwayClient(arrivals, []),
         )
 
         await run_transit_job(ctx)
@@ -1085,7 +1045,9 @@ async def test_arrival_before_window_skips(monkeypatch: pytest.MonkeyPatch) -> N
             )
             m.setattr(
                 "app.notifications.transit.worker.SubwayClient",
-                lambda http_client, settings: _FakeSubwayClient(arrivals, call_count),
+                lambda http_client, settings, redis: _FakeSubwayClient(
+                    arrivals, call_count
+                ),
             )
 
             await run_transit_job(ctx)
@@ -1132,7 +1094,7 @@ async def test_arrival_direction_mismatch_skips(
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+            lambda http_client, settings, redis: _FakeSubwayClient(arrivals, []),
         )
 
         await run_transit_job(ctx)
@@ -1177,7 +1139,7 @@ async def test_arrival_too_far_skips(monkeypatch: pytest.MonkeyPatch) -> None:
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+            lambda http_client, settings, redis: _FakeSubwayClient(arrivals, []),
         )
 
         await run_transit_job(ctx)
@@ -1186,52 +1148,7 @@ async def test_arrival_too_far_skips(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# arrival 케이스 6: redis_client=None → warn 로그, 큐 0건, raise 없음
-# (별도 단독 테스트로도 확인, 케이스 5에서 이미 다루지만 명시 분리)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@time_machine.travel(_ARRIVAL_FIXED_KST, tick=False)
-async def test_arrival_redis_none_skip_no_raise(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """redis_client=None 인 경우 arrival 분기가 warn 하고 큐 0건 + 예외 없음."""
-    notif = _FakeNotification(
-        id=205,
-        user_id=15,
-        type=NotificationType.TRANSIT,
-        enabled=True,
-        config=_ARRIVAL_NOTIF_CFG,
-    )
-    user = _FakeUser(id=15, discord_id=33333)
-    arrivals = [_make_arrival(direction="상행", seconds=200, train_no="A001")]
-
-    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
-    ctx = _make_arrival_ctx(queue=queue, redis=None)
-
-    with monkeypatch.context() as m:
-        m.setattr(
-            "app.notifications.transit.worker.NotificationRepository",
-            lambda session: _FakeNotificationRepo([(notif, user)]),
-        )
-        m.setattr(
-            "app.notifications.transit.worker.NotificationHistoryRepository",
-            lambda session: _FakeHistoryRepo(last_sent_at=None),
-        )
-        m.setattr(
-            "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
-        )
-
-        # 예외 없이 정상 종료돼야 한다.
-        await run_transit_job(ctx)
-
-    assert queue.qsize() == 0
-
-
-# ---------------------------------------------------------------------------
-# arrival 케이스 7: TTL NX 동작 — 두 번째 SADD 시 TTL 초기화 안 됨
+# arrival 케이스 6: TTL NX 동작 — 두 번째 SADD 시 TTL 초기화 안 됨
 # ---------------------------------------------------------------------------
 
 
@@ -1278,7 +1195,7 @@ async def test_arrival_ttl_nx_not_reset_on_second_sadd(
         )
         m.setattr(
             "app.notifications.transit.worker.SubwayClient",
-            lambda http_client, settings: _FakeSubwayClient(arrivals, []),
+            lambda http_client, settings, redis: _FakeSubwayClient(arrivals, []),
         )
 
         await run_transit_job(ctx)

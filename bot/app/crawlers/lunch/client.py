@@ -1,9 +1,10 @@
 """건국대 학식 주간 메뉴 크롤러 (Playwright 기반).
 
 lifespan 에서 단일 chromium Browser 를 만들어 주입받고, 매 호출 새 BrowserContext +
-Page 만 생성·종료한다. 모듈 dict 캐시는 ISO 주 단위 (asyncio.Lock 가드).
+Page 만 생성·종료한다. Redis TTL 캐시: 키 `lunch:menu:{iso_week}`, TTL 7일.
 
-Redis TTL 캐시 도입은 §C-1 Redis 일정 이후.
+동시 miss 시 Playwright 중복 실행 가능성은 단일 캠퍼스 부하라 무시한다.
+분산락(SET NX EX) 도입은 로드맵 부채로 남긴다.
 
 페이지 구조 (2026-05 기준; 이전 부채 경로 `bot/scrapers/cafeteria.py` 는 삭제됨 — git 히스토리 참고):
 - 목록 페이지: https://www.konkuk.ac.kr/general/18211/subview.do
@@ -14,12 +15,13 @@ Redis TTL 캐시 도입은 §C-1 Redis 일정 이후.
 
 from __future__ import annotations
 
-import asyncio
+import json
 import re
-from dataclasses import dataclass
+from collections.abc import Awaitable
+from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from html import unescape
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import structlog
 
@@ -27,6 +29,7 @@ from app.crawlers.lunch.exceptions import LunchCrawlerFailed
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser
+    from redis.asyncio import Redis
 
 _logger = structlog.get_logger(__name__)
 
@@ -36,6 +39,9 @@ _COL_OFFSET = 3
 _BR_RE = re.compile(r"<br\s*/?>", flags=re.IGNORECASE)
 _CORNER_TIME_RE = re.compile(r"^(.+?)\((.+?)\)$")
 _CAFETERIA_NAME = "건국대 학생식당"
+
+# Redis TTL: 7일(초).
+_REDIS_TTL_SECONDS = 7 * 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -55,19 +61,16 @@ class LunchMenu:
     menus: tuple[str, ...]
 
 
-_cache: dict[str, dict[str, LunchMenu]] = {}
-_cache_lock = asyncio.Lock()
-
-
 def _week_key(today: date) -> str:
     iso = today.isocalendar()
     return f"{iso.year}-W{iso.week:02d}"
 
 
 class LunchClient:
-    def __init__(self, browser: Browser, url: str) -> None:
+    def __init__(self, browser: "Browser", url: str, redis: "Redis") -> None:
         self._browser = browser
         self._url = url
+        self._redis = redis
 
     async def fetch_today_menu(self) -> LunchMenu:
         today = date.today()
@@ -82,48 +85,52 @@ class LunchClient:
             )
 
         week_key = _week_key(today)
-        async with _cache_lock:
-            cached_week = _cache.get(week_key)
-            if cached_week is not None:
-                cached = cached_week.get(today.isoformat())
-                if cached is not None:
-                    _logger.info(
-                        "lunch_cache_hit",
-                        iso_week=week_key,
-                        date=today.isoformat(),
-                    )
-                    return cached
+        redis_key = f"lunch:menu:{week_key}"
 
-            try:
-                week_corners = await self._scrape_week()
-            except LunchCrawlerFailed:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                raise LunchCrawlerFailed(f"scrape_unexpected: {exc}") from exc
-
-            monday = today - timedelta(days=wd_idx)
-            days: dict[str, LunchMenu] = {}
-            for i in range(5):
-                day = monday + timedelta(days=i)
-                corners = week_corners.get(i, ())
-                lunch_only = tuple(
-                    m for c in corners if c.meal == "점심" for m in c.menus
+        raw = await cast("Awaitable[str | None]", self._redis.get(redis_key))
+        if raw is not None:
+            week_data = _deserialize_week(raw)
+            cached = week_data.get(today.isoformat())
+            if cached is not None:
+                _logger.info(
+                    "lunch_cache_hit",
+                    iso_week=week_key,
+                    date=today.isoformat(),
                 )
-                days[day.isoformat()] = LunchMenu(
-                    date_str=day.isoformat(),
-                    weekday=_WEEKDAY_KO[i],
-                    cafeteria_name=_CAFETERIA_NAME,
-                    corners=corners,
-                    menus=lunch_only,
-                )
+                return cached
 
-            _cache[week_key] = days
-            _logger.info(
-                "lunch_fetched",
-                iso_week=week_key,
-                corner_count=sum(len(d.corners) for d in days.values()),
+        try:
+            week_corners = await self._scrape_week()
+        except LunchCrawlerFailed:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise LunchCrawlerFailed(f"scrape_unexpected: {exc}") from exc
+
+        monday = today - timedelta(days=wd_idx)
+        days: dict[str, LunchMenu] = {}
+        for i in range(5):
+            day = monday + timedelta(days=i)
+            corners = week_corners.get(i, ())
+            lunch_only = tuple(m for c in corners if c.meal == "점심" for m in c.menus)
+            days[day.isoformat()] = LunchMenu(
+                date_str=day.isoformat(),
+                weekday=_WEEKDAY_KO[i],
+                cafeteria_name=_CAFETERIA_NAME,
+                corners=corners,
+                menus=lunch_only,
             )
-            return days[today.isoformat()]
+
+        serialized = _serialize_week(days)
+        await cast(
+            "Awaitable[object]",
+            self._redis.setex(redis_key, _REDIS_TTL_SECONDS, serialized),
+        )
+        _logger.info(
+            "lunch_fetched",
+            iso_week=week_key,
+            corner_count=sum(len(d.corners) for d in days.values()),
+        )
+        return days[today.isoformat()]
 
     async def _scrape_week(self) -> dict[int, tuple[LunchCorner, ...]]:
         # Playwright 는 호출 시점에 동적으로 import — 테스트가 _scrape_week 를 모킹할 때
@@ -189,5 +196,57 @@ class LunchClient:
             raise LunchCrawlerFailed(f"playwright_timeout: {exc}") from exc
 
 
-def _clear_cache_for_tests() -> None:
-    _cache.clear()
+def _serialize_week(days: dict[str, LunchMenu]) -> str:
+    """LunchMenu dict → JSON 문자열. 모듈 내부 전용."""
+
+    def _menu_to_dict(m: LunchMenu) -> dict[str, object]:
+        d = asdict(m)
+        # tuple → list 변환은 asdict 가 처리함. corners 내부 menus 도 list 로 변환됨.
+        return d
+
+    return json.dumps(
+        {date_str: _menu_to_dict(menu) for date_str, menu in days.items()},
+        ensure_ascii=False,
+    )
+
+
+def _deserialize_week(raw: str) -> dict[str, LunchMenu]:
+    """JSON 문자열 → LunchMenu dict. 모듈 내부 전용."""
+    data: dict[str, object] = json.loads(raw)
+    result: dict[str, LunchMenu] = {}
+    for date_str, item in data.items():
+        if not isinstance(item, dict):
+            continue
+        corners_raw = item.get("corners", [])
+        corners: tuple[LunchCorner, ...] = ()
+        if isinstance(corners_raw, list):
+            parsed_corners: list[LunchCorner] = []
+            for c in corners_raw:
+                if isinstance(c, dict):
+                    menus_raw = c.get("menus", [])
+                    menus = (
+                        tuple(str(x) for x in menus_raw)
+                        if isinstance(menus_raw, list)
+                        else ()
+                    )
+                    parsed_corners.append(
+                        LunchCorner(
+                            name=str(c.get("name", "")),
+                            time=str(c.get("time", "")),
+                            meal=str(c.get("meal", "")),
+                            menus=menus,
+                        )
+                    )
+            corners = tuple(parsed_corners)
+        menus_raw2 = item.get("menus", [])
+        menus2 = (
+            tuple(str(x) for x in menus_raw2) if isinstance(menus_raw2, list) else ()
+        )
+        result[date_str] = LunchMenu(
+            date_str=str(item.get("date_str", date_str)),
+            weekday=str(item.get("weekday", "")),
+            cafeteria_name=str(item.get("cafeteria_name", "")),
+            corners=corners,
+            menus=menus2,
+        )
+    return result

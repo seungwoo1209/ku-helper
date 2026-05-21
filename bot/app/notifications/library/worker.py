@@ -55,19 +55,12 @@ async def _set_state(redis: "Redis", key: str, value: str) -> None:
 
 
 async def run_library_job(ctx: JobContext) -> None:
-    """LIBRARY 활성 구독을 폴링하여 F-13/F-14/F-15 조건 충족 시 Sender 큐에 적재한다.
-
-    redis_client 가 없으면 F-14 상태머신을 구현할 수 없어 잡을 skip 한다.
-    """
+    """LIBRARY 활성 구독을 폴링하여 F-13/F-14/F-15 조건 충족 시 Sender 큐에 적재한다."""
     redis = ctx.redis_client
-    if redis is None:
-        _logger.warning("library_skip_no_redis")
-        return
-
     now = datetime.now(tz=timezone.utc)
 
     try:
-        client = LibraryClient(ctx.http_client, ctx.settings)
+        client = LibraryClient(ctx.http_client, ctx.settings, redis=ctx.redis_client)
 
         async with ctx.session_maker() as session:
             repo = NotificationRepository(session)
@@ -157,7 +150,7 @@ async def run_immediate_send_library_job(ctx: JobContext) -> None:
     now = datetime.now(tz=timezone.utc)
 
     try:
-        client = LibraryClient(ctx.http_client, ctx.settings)
+        client = LibraryClient(ctx.http_client, ctx.settings, redis=ctx.redis_client)
 
         async with ctx.session_maker() as session:
             repo = ImmediateSendRequestRepository(session)

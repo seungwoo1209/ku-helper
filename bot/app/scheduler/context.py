@@ -29,6 +29,7 @@ class JobContext:
     http_client: httpx.AsyncClient
     session_maker: async_sessionmaker[AsyncSession]
     settings: Settings
+    redis_client: "Redis"
     in_flight_notification_ids: set[int] = field(default_factory=set)
     # §C-3 즉시 발송 lunch worker 가 사용. lifespan 에서 lunch_client·restaurants_client 가
     # 만들어지지 못한 경우(키 미설정 등) None 이며 worker 는 skip.
@@ -36,5 +37,3 @@ class JobContext:
     restaurants_client: "RestaurantsClient | None" = None
     # lunch + transit 즉시 발송 worker 가 공유. request_id 단일 시퀀스라 lunch/transit 간 충돌 없음.
     immediate_send_inflight: set[int] = field(default_factory=set)
-    # §D 도서관 F-14 상태머신용. redis_url 미설정 시 None 이며 library worker 는 skip.
-    redis_client: "Redis | None" = None

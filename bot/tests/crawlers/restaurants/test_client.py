@@ -1,13 +1,11 @@
 """RestaurantsClient 단위 테스트. Naver Local API 호출은 respx 로 모킹."""
 
-from typing import Any
-
+import fakeredis.aioredis
 import httpx
 import pytest
 import respx
 from pydantic import SecretStr
 
-from app.crawlers.restaurants import client as restaurants_module
 from app.crawlers.restaurants.client import (
     _NAVER_LOCAL_URL,
     _QUERIES,
@@ -16,11 +14,9 @@ from app.crawlers.restaurants.client import (
 from app.crawlers.restaurants.exceptions import RestaurantsCrawlerFailed
 
 
-@pytest.fixture(autouse=True)
-def _reset_cache() -> Any:
-    restaurants_module._clear_cache_for_tests()
-    yield
-    restaurants_module._clear_cache_for_tests()
+@pytest.fixture
+def redis() -> fakeredis.aioredis.FakeRedis:
+    return fakeredis.aioredis.FakeRedis(decode_responses=True)
 
 
 def _items(*names: str) -> dict[str, list[dict[str, str]]]:
@@ -39,14 +35,16 @@ def _items(*names: str) -> dict[str, list[dict[str, str]]]:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_fetch_pool_dedups_and_normalizes() -> None:
+async def test_fetch_pool_dedups_and_normalizes(
+    redis: fakeredis.aioredis.FakeRedis,
+) -> None:
     # 모든 카테고리에 동일한 두 이름 → 응답 풀은 중복 제거되어 2건만.
     respx.get(_NAVER_LOCAL_URL).mock(
         return_value=httpx.Response(200, json=_items("소담", "일미식당"))
     )
 
     async with httpx.AsyncClient() as http:
-        client = RestaurantsClient(http, "id", SecretStr("secret"))
+        client = RestaurantsClient(http, "id", SecretStr("secret"), redis=redis)
         pool = await client.fetch_pool()
 
     assert len(pool) == 2
@@ -61,41 +59,47 @@ async def test_fetch_pool_dedups_and_normalizes() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_fetch_pool_uses_cache_for_same_date() -> None:
+async def test_fetch_pool_uses_cache_for_same_date(
+    redis: fakeredis.aioredis.FakeRedis,
+) -> None:
     route = respx.get(_NAVER_LOCAL_URL).mock(
         return_value=httpx.Response(200, json=_items("소담"))
     )
 
     async with httpx.AsyncClient() as http:
-        client = RestaurantsClient(http, "id", SecretStr("secret"))
+        client = RestaurantsClient(http, "id", SecretStr("secret"), redis=redis)
         await client.fetch_pool()
         await client.fetch_pool()
 
-    # 첫 호출만 카테고리 10건 호출. 두 번째는 캐시 hit.
+    # 첫 호출만 카테고리 10건 호출. 두 번째는 Redis 캐시 hit.
     assert route.call_count == len(_QUERIES)
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_fetch_pool_raises_on_http_5xx() -> None:
+async def test_fetch_pool_raises_on_http_5xx(
+    redis: fakeredis.aioredis.FakeRedis,
+) -> None:
     respx.get(_NAVER_LOCAL_URL).mock(return_value=httpx.Response(503))
 
     async with httpx.AsyncClient() as http:
-        client = RestaurantsClient(http, "id", SecretStr("secret"))
+        client = RestaurantsClient(http, "id", SecretStr("secret"), redis=redis)
         with pytest.raises(RestaurantsCrawlerFailed) as exc_info:
             await client.fetch_pool()
     assert "naver_http_503" in exc_info.value.reason
 
 
 @pytest.mark.asyncio
-async def test_constructor_rejects_missing_credentials() -> None:
+async def test_constructor_rejects_missing_credentials(
+    redis: fakeredis.aioredis.FakeRedis,
+) -> None:
     async with httpx.AsyncClient() as http:
         with pytest.raises(RestaurantsCrawlerFailed) as exc_info:
-            RestaurantsClient(http, None, SecretStr("secret"))
+            RestaurantsClient(http, None, SecretStr("secret"), redis=redis)
         assert exc_info.value.reason == "naver_credentials_missing"
 
         with pytest.raises(RestaurantsCrawlerFailed):
-            RestaurantsClient(http, "id", None)
+            RestaurantsClient(http, "id", None, redis=redis)
 
         with pytest.raises(RestaurantsCrawlerFailed):
-            RestaurantsClient(http, "id", SecretStr(""))
+            RestaurantsClient(http, "id", SecretStr(""), redis=redis)

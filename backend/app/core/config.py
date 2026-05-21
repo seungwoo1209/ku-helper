@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     database_url: str
+    redis_url: str
     cors_origins: list[str] = Field(default_factory=list)
 
     jwt_secret: SecretStr
