@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import fakeredis.aioredis
 import pytest
 
+from app.admin.alerts import CrawlerSource
 from app.crawlers.library.client import RoomSeats
 from app.crawlers.library.exceptions import LibraryCrawlerFailed
 from app.db.models import NotificationType
@@ -238,6 +239,35 @@ async def test_crawler_failure_is_swallowed(
     await run_library_job(ctx)
 
     assert ctx.queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_crawler_failure_calls_admin_alert(
+    monkeypatch: pytest.MonkeyPatch, redis: fakeredis.aioredis.FakeRedis
+) -> None:
+    """크롤러 실패 시 maybe_enqueue_admin_alerts 가 LIBRARY source 로 1회 호출."""
+    pair = _notification({"reading_room_id": 1, "threshold": 20})
+    _patch_repo(monkeypatch, [pair])
+    _patch_client(monkeypatch, {}, raises=LibraryCrawlerFailed("boom"))
+    ctx = _ctx(redis)
+
+    enqueue_calls: list[tuple[object, ...]] = []
+
+    async def _fake_enqueue(
+        queue: object,
+        redis: object,
+        settings: object,
+        source: CrawlerSource,
+        exc: BaseException,
+    ) -> None:
+        enqueue_calls.append((source, exc))
+
+    monkeypatch.setattr(worker_module, "maybe_enqueue_admin_alerts", _fake_enqueue)
+
+    await run_library_job(ctx)
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0][0] == CrawlerSource.LIBRARY
 
 
 # ---------------------------------------------------------------------------

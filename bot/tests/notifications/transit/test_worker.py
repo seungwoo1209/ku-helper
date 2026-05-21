@@ -19,6 +19,7 @@ import httpx
 import pytest
 import time_machine
 
+from app.admin.alerts import CrawlerSource
 from app.crawlers.subway.client import SubwayArrival
 from app.crawlers.subway.exceptions import SubwayApiUnavailable
 from app.db.models import NotificationDeliveryStatus, NotificationType
@@ -479,6 +480,86 @@ async def test_api_unavailable_swallowed_queue_empty(
         await run_transit_job(ctx)
 
     assert queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# F-22 회귀 가드: SubwayApiUnavailable → maybe_enqueue_admin_alerts 1회 호출
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_FIXED_KST, tick=False)
+async def test_api_unavailable_calls_admin_alert_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """사용자 2명이 있어도 SubwayApiUnavailable 발생 시 admin alert 는 1회만 호출.
+
+    외곽 catch 로 이전돼 사용자 루프 외부에서 예외가 잡히므로 카운터 INCR 1회 확인.
+    """
+    notif1 = _FakeNotification(
+        id=31,
+        user_id=1,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config={
+            "mode": "recurring",
+            "station_name": "강남",
+            "line": "2호선",
+            "repeat_interval_minutes": 0,
+        },
+    )
+    notif2 = _FakeNotification(
+        id=32,
+        user_id=2,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config={
+            "mode": "recurring",
+            "station_name": "강남",
+            "line": "9호선",
+            "repeat_interval_minutes": 0,
+        },
+    )
+    user1 = _FakeUser(id=1, discord_id=1111)
+    user2 = _FakeUser(id=2, discord_id=2222)
+
+    enqueue_calls: list[tuple[object, ...]] = []
+
+    async def _fake_enqueue(
+        queue: object,
+        redis: object,
+        settings: object,
+        source: CrawlerSource,
+        exc: BaseException,
+    ) -> None:
+        enqueue_calls.append((source, exc))
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_ctx(queue=queue)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif1, user1), (notif2, user2)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings, redis: _RaisingSubwayClient(),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.maybe_enqueue_admin_alerts",
+            _fake_enqueue,
+        )
+
+        await run_transit_job(ctx)
+
+    # 사용자 수와 무관하게 외곽 catch 에서 1회만 호출돼야 한다.
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0][0] == CrawlerSource.SUBWAY
 
 
 # ---------------------------------------------------------------------------

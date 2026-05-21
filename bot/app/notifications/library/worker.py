@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 
 import structlog
 
+from app.admin.alerts import CrawlerSource, maybe_enqueue_admin_alerts
 from app.core.exceptions import BotException
 from app.crawlers.library.client import LibraryClient
 from app.crawlers.library.exceptions import LibraryCrawlerFailed
@@ -135,8 +136,11 @@ async def run_library_job(ctx: JobContext) -> None:
                     room_id=room_id,
                 )
     except (LibraryCrawlerFailed, BotException) as exc:
-        # crawler/도메인 예외는 swallow + 로그. 다음 틱 재시도(F-22 카운터는 후속).
+        # crawler/도메인 예외는 swallow + 로그. 다음 틱 재시도.
         _logger.warning("library_poll_failed", code=exc.code)
+        await maybe_enqueue_admin_alerts(
+            ctx.queue, ctx.redis_client, ctx.settings, CrawlerSource.LIBRARY, exc
+        )
 
 
 async def run_immediate_send_library_job(ctx: JobContext) -> None:

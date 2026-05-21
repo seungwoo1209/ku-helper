@@ -7,9 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 import fakeredis.aioredis
 import pytest
 
+from app.admin.alerts import CrawlerSource
 from app.crawlers.lunch.client import LunchCorner, LunchMenu
 from app.crawlers.lunch.exceptions import LunchCrawlerFailed
 from app.crawlers.restaurants.client import Restaurant
+from app.notifications.lunch import worker as lunch_worker_module
 from app.notifications.lunch.repository import ImmediateSendRequestRow
 from app.notifications.lunch.worker import run_immediate_send_lunch_job
 from app.scheduler.context import JobContext
@@ -200,3 +202,64 @@ async def test_run_immediate_send_lunch_job_writes_failed_history_on_crawler_err
     assert len(failed_inserts) == 1
     assert failed_inserts[0]["immediate_send_request_id"] == 30
     assert 30 not in ctx.immediate_send_inflight
+
+
+@pytest.mark.asyncio
+async def test_run_immediate_send_lunch_job_calls_admin_alert_on_lunch_crawler_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LunchCrawlerFailed 발생 시 maybe_enqueue_admin_alerts 가 LUNCH source 로 호출."""
+    rows = [
+        ImmediateSendRequestRow(id=40, user_id=4, discord_id=102, payload={}),
+    ]
+    ctx, _, _, queue = _make_ctx(
+        rows,
+        lunch_result=LunchCrawlerFailed("playwright_timeout"),
+        restaurants_result=(),
+    )
+
+    async def _fake_list_pending(self: Any, type_: Any, limit: int = 50) -> list[Any]:
+        return rows
+
+    monkeypatch.setattr(
+        "app.notifications.lunch.repository.ImmediateSendRequestRepository.list_pending",
+        _fake_list_pending,
+    )
+
+    class _FakeHistoryRepo:
+        def __init__(self, session: Any) -> None:
+            pass
+
+        async def insert_result(self, **kwargs: Any) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "app.notifications.lunch.worker.NotificationHistoryRepository",
+        _FakeHistoryRepo,
+    )
+
+    enqueue_calls: list[tuple[object, ...]] = []
+
+    async def _fake_enqueue(
+        queue: object,
+        redis: object,
+        settings: object,
+        source: CrawlerSource,
+        exc: BaseException,
+    ) -> None:
+        enqueue_calls.append((source, exc))
+
+    monkeypatch.setattr(
+        lunch_worker_module,
+        "maybe_enqueue_admin_alerts",
+        _fake_enqueue,
+    )
+
+    fake_session = AsyncMock()
+    ctx.session_maker.return_value.__aenter__.return_value = fake_session  # type: ignore[attr-defined]
+    ctx.session_maker.return_value.__aexit__.return_value = False  # type: ignore[attr-defined]
+
+    await run_immediate_send_lunch_job(ctx)
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0][0] == CrawlerSource.LUNCH
