@@ -17,20 +17,28 @@ NullPool로 connection 재사용도 차단해 다른 테스트의 idle connectio
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
 
-import httpx
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
+# Settings.redis_url 은 필수 필드. 테스트는 fakeredis 로 app.state.redis 를 덮어쓰지만
+# Settings 인스턴스화 자체에는 URL 문자열이 필요하므로 placeholder 를 미리 주입한다.
+# app.main 임포트 시점에 get_settings() 가 호출되므로 반드시 그 이전에 설정.
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+
+from collections.abc import AsyncIterator  # noqa: E402
+
+import fakeredis.aioredis  # noqa: E402
+import httpx  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from redis.asyncio import Redis  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncEngine,
     AsyncSession,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool  # noqa: E402
 
-from app.core.database import Base, get_session
-from app.main import app
+from app.core.database import Base, get_session  # noqa: E402
+from app.main import app  # noqa: E402
 
 _DEFAULT_TEST_DB_URL = (
     "postgresql+asyncpg://ku_helper:ku_helper_test@localhost:5433/ku_helper_test"
@@ -74,13 +82,33 @@ async def _ensure_app_http_client() -> AsyncIterator[None]:
 
 
 @pytest_asyncio.fixture
+async def redis_client() -> AsyncIterator[Redis]:
+    """매 테스트마다 비어 있는 fakeredis 인스턴스 + app.state.redis 오버라이드.
+
+    auth 의존성이 `request.app.state.redis` 를 참조하므로 client 픽스처가 잡히기 전에
+    state 를 세팅해 둔다. 테스트 종료 후 attribute 를 정리해 다음 테스트로 누설 방지.
+    """
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    app.state.redis = fake
+    try:
+        yield fake
+    finally:
+        await fake.aclose()
+        if hasattr(app.state, "redis"):
+            del app.state.redis
+
+
+@pytest_asyncio.fixture
 async def db_session(test_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     async with AsyncSession(test_engine, expire_on_commit=False) as session:
         yield session
 
 
 @pytest_asyncio.fixture
-async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+async def client(
+    db_session: AsyncSession,
+    redis_client: Redis,
+) -> AsyncIterator[AsyncClient]:
     async def _override_get_session() -> AsyncIterator[AsyncSession]:
         # commit/rollback은 의도적으로 생략한다 (위 docstring 참조).
         yield db_session
