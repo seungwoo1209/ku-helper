@@ -83,7 +83,12 @@ function App() {
   }
 
   if (!authReady) return null; // 초기화 중 빈 화면
-  if (!user) return <LoginScreen />;
+  if (!user) return (
+    <LoginScreen onDevLogin={import.meta.env.DEV ? () => setUser({
+      id: 0, discord_id: 0, discord_username: 'dev_user',
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }) : undefined} />
+  );
 
   const reloadNotifications = async () => {
     try {

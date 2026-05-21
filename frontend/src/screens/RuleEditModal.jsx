@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { Modal, Field, Btn } from '../components/ui';
 import { createNotification, updateNotification, deleteNotification } from '../api/notifications';
 
+const fmtTime = (t) => (t ? t.slice(0, 5) : '');
+
 /* ── Transit 폼 ─────────────────────────────────── */
 function TransitForm({ config, onChange }) {
   const c = config;
@@ -29,14 +31,23 @@ function TransitForm({ config, onChange }) {
         </div>
       </Field>
       {c.mode === 'arrival' ? (
-        <Field label="도착 몇 분 전">
-          <input className="input" type="number" min={1} max={120}
-            value={c.minutes_before} onChange={e => set('minutes_before', Number(e.target.value))} />
-        </Field>
+        <>
+          <div className="field-row">
+            <Field label="방향">
+              <select className="select" value={c.direction} onChange={e => set('direction', e.target.value)}>
+                {['상행','하행','내선','외선'].map(d => <option key={d}>{d}</option>)}
+              </select>
+            </Field>
+            <Field label="도착 몇 분 전">
+              <input className="input" type="number" min={1} max={120}
+                value={c.minutes_before} onChange={e => set('minutes_before', Number(e.target.value))} />
+            </Field>
+          </div>
+        </>
       ) : (
         <div className="field-row">
-          <Field label="시작 시각"><input className="input" type="time" value={c.start_time} onChange={e => set('start_time', e.target.value)} /></Field>
-          <Field label="종료 시각"><input className="input" type="time" value={c.end_time} onChange={e => set('end_time', e.target.value)} /></Field>
+          <Field label="시작 시각"><input className="input" type="time" value={fmtTime(c.start_time)} onChange={e => set('start_time', e.target.value)} /></Field>
+          <Field label="종료 시각"><input className="input" type="time" value={fmtTime(c.end_time)} onChange={e => set('end_time', e.target.value)} /></Field>
           <Field label="반복 간격 (분)">
             <input className="input" type="number" min={1} max={180}
               value={c.repeat_interval_minutes} onChange={e => set('repeat_interval_minutes', Number(e.target.value))} />
@@ -65,7 +76,7 @@ function LunchForm({ config, onChange }) {
     <>
       <div className="field-row">
         <Field label="발송 시각">
-          <input className="input" type="time" value={c.notify_at} onChange={e => set('notify_at', e.target.value)} />
+          <input className="input" type="time" value={fmtTime(c.notify_at)} onChange={e => set('notify_at', e.target.value)} />
         </Field>
         <Field label="추천 음식점 수 (1–10)">
           <input className="input" type="number" min={1} max={10}
@@ -119,8 +130,8 @@ function LibraryForm({ config, onChange }) {
 
 /* ── 기본 config 초기값 ──────────────────────────── */
 function defaultConfig(kind, existing) {
-  if (existing) return { ...existing };
-  if (kind === 'transit') return { mode: 'arrival', station_name: '', line: '2호선', minutes_before: 3, include_congestion: true, start_time: '08:00', end_time: '09:30', repeat_interval_minutes: 15 };
+  if (existing) return kind === 'transit' ? { direction: '상행', ...existing } : { ...existing };
+  if (kind === 'transit') return { mode: 'arrival', station_name: '', line: '2호선', direction: '상행', minutes_before: 3, include_congestion: true, start_time: '08:00', end_time: '09:30', repeat_interval_minutes: 15 };
   if (kind === 'lunch')   return { notify_at: '11:30', max_price: null, recommend_count: 3, highlight_today_pick: true };
   if (kind === 'library') return { reading_room_id: READING_ROOMS[0], threshold: 20, urgent_threshold: null };
   return {};

@@ -1,4 +1,28 @@
 import { SectionHead, Toggle } from '../components/ui';
+import { updateNotification } from '../api/notifications';
+
+const fmtTime = (t) => (t ? t.slice(0, 5) : '');
+
+function transitRows(rules) {
+  const active = rules.filter(r => r.on).slice(0, 2);
+  if (!active.length) return [{ left: '등록된 교통 알림 없음', when: '–' }];
+  return active.map(r => {
+    const c = r.config;
+    const when = c?.mode === 'recurring'
+      ? `매 ${c.repeat_interval_minutes}분 ${fmtTime(c.start_time)}–${fmtTime(c.end_time)}`
+      : c?.minutes_before ? `도착 ${c.minutes_before}분 전` : r.sub;
+    return { left: r.name, when };
+  });
+}
+
+function lunchRows(rules) {
+  const active = rules.filter(r => r.on).slice(0, 2);
+  if (!active.length) return [{ left: '등록된 점심 알림 없음', when: '–' }];
+  return active.map(r => ({
+    left: `추천 ${r.config?.recommend_count ?? 3}곳${r.config?.max_price ? ` · ₩${r.config.max_price.toLocaleString()} 이하` : ''}`,
+    when: `평일 ${fmtTime(r.config?.notify_at ?? '')}`,
+  }));
+}
 
 const CatCard = ({ num, name, summaryNum, unit, sub, rows, checked, onToggle, onOpen, catKey }) => (
   <div className="cat" data-cat={catKey}>
@@ -28,6 +52,24 @@ const CatCard = ({ num, name, summaryNum, unit, sub, rows, checked, onToggle, on
 
 const DashboardScreen = ({ state, setState, openRule }) => {
   const { transit, lunch, library, feed } = state;
+
+  /* 카테고리 토글 → 해당 카테고리 전체 규칙 bulk enable/disable */
+  async function handleCategoryToggle(category, rulesKey, enabled) {
+    const rules = state[category][rulesKey];
+    // 낙관적 업데이트
+    setState(s => ({
+      ...s,
+      [category]: {
+        ...s[category],
+        [rulesKey]: s[category][rulesKey].map(r => ({ ...r, on: enabled })),
+      },
+    }));
+    // 백엔드 동기화 (실패해도 UI는 유지 — 재시도 없음)
+    await Promise.allSettled(
+      rules.map(r => updateNotification(category, r.id, { enabled }))
+    );
+  }
+
   return (
     <>
       <div className="hero">
@@ -57,24 +99,19 @@ const DashboardScreen = ({ state, setState, openRule }) => {
           catKey="transit" num="01" name="교통"
           summaryNum={transit.rules.filter(r => r.on).length} unit="규칙 활성"
           sub="서울 공공 API · 1분 갱신"
-          rows={[
-            { left: "신촌 2호선 — 등굣길", when: "월–금 08:25" },
-            { left: "강남 9호선 — 자취", when: "매 15분 18:00–19:30" },
-          ]}
-          checked={transit.on}
-          onToggle={(v) => setState(s => ({ ...s, transit: { ...s.transit, on: v } }))}
+          rows={transitRows(transit.rules)}
+          checked={transit.rules.some(r => r.on)}
+          onToggle={(v) => handleCategoryToggle('transit', 'rules', v)}
           onOpen={() => openRule('transit')}
         />
         <CatCard
           catKey="lunch" num="02" name="점심"
-          summaryNum="11:30" unit="발송"
+          summaryNum={fmtTime(lunch.rules.find(r => r.on)?.config?.notify_at ?? lunch.rules[0]?.config?.notify_at ?? '–')}
+          unit="발송"
           sub="학식 크롤링 · 음식점 3+ 추천"
-          rows={[
-            { left: "학생식당 A · 본관", when: "평일 11:30" },
-            { left: "주변 음식점 — ₩9,000 이하", when: "조건 활성" },
-          ]}
-          checked={lunch.on}
-          onToggle={(v) => setState(s => ({ ...s, lunch: { ...s.lunch, on: v } }))}
+          rows={lunchRows(lunch.rules)}
+          checked={lunch.rules.some(r => r.on)}
+          onToggle={(v) => handleCategoryToggle('lunch', 'rules', v)}
           onOpen={() => openRule('lunch')}
         />
         <CatCard
@@ -85,8 +122,8 @@ const DashboardScreen = ({ state, setState, openRule }) => {
             { left: "제 1 열람실 — 20석 이하", when: "임계" },
             { left: "제 4 열람실 — 8석 이하 (긴급)", when: "긴급" },
           ]}
-          checked={library.on}
-          onToggle={(v) => setState(s => ({ ...s, library: { ...s.library, on: v } }))}
+          checked={library.rooms.some(r => r.on)}
+          onToggle={(v) => handleCategoryToggle('library', 'rooms', v)}
           onOpen={() => openRule('library')}
         />
       </div>

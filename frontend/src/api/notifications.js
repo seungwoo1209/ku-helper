@@ -41,6 +41,12 @@ export async function deleteNotification(id) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
+/* "HH:MM:SS" 또는 "HH:MM" → "HH:MM" */
+function fmtTime(t) {
+  if (!t) return '';
+  return t.slice(0, 5);
+}
+
 /* API 응답 → 화면 표시용 형태 변환 */
 function toDisplayItem(n) {
   const base = { id: n.id, on: n.enabled, type: n.type, config: n.config };
@@ -51,10 +57,11 @@ function toDisplayItem(n) {
       return {
         ...base,
         name: `${c.station_name} ${c.line}`,
-        sub: `${c.station_name}역 · ${c.line} · 도착 ${c.minutes_before}분 전`,
+        sub: `${c.station_name}역 · ${c.line} · ${c.direction} · 도착 ${c.minutes_before}분 전`,
         conds: [
           { k: '역', v: c.station_name },
           { k: '노선', v: c.line },
+          { k: '방향', v: c.direction },
           { k: '발송', v: `도착 ${c.minutes_before}분 전` },
           { k: '혼잡도', v: c.include_congestion ? 'on' : 'off' },
         ],
@@ -68,20 +75,22 @@ function toDisplayItem(n) {
         { k: '역', v: c.station_name },
         { k: '노선', v: c.line },
         { k: '간격', v: `${c.repeat_interval_minutes}분` },
-        { k: '시간', v: `${c.start_time}–${c.end_time}` },
+        { k: '시간', v: `${fmtTime(c.start_time)}–${fmtTime(c.end_time)}` },
       ],
     };
   }
 
   if (n.type === 'LUNCH') {
+    const at = fmtTime(c.notify_at);
     return {
       ...base,
-      name: `점심 알림 — ${c.notify_at}`,
-      sub: `${c.notify_at} 발송 · 추천 ${c.recommend_count}곳`,
+      name: `점심 알림 — ${at}`,
+      sub: `${at} 발송 · 추천 ${c.recommend_count}곳`,
       conds: [
-        { k: '시각', v: c.notify_at },
+        { k: '시각', v: at },
         { k: '추천', v: `${c.recommend_count}곳` },
         ...(c.max_price ? [{ k: '예산', v: `≤ ₩${c.max_price.toLocaleString()}` }] : []),
+        { k: '오늘의 추천', v: c.highlight_today_pick ? '강조' : '끄기' },
       ],
     };
   }
