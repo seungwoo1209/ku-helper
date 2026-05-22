@@ -10,12 +10,12 @@
         "tags": [
           "auth"
         ],
-        "summary": "Login",
-        "description": "Discord 인가 페이지로 사용자를 리다이렉트한다.",
+        "summary": "Discord 로그인 시작",
+        "description": "Discord 인가 페이지로 사용자를 307 리다이렉트한다. scope = `identify`, `applications.commands`. `applications.commands` 는 user-install (`integration_type=1`) 을 자동 성립시켜 mutual guild 가 없는 사용자에게도 DM 발송이 가능하도록 한다(Discord 에러 50278 회피).\n\n서버는 5분 만료 state JWT 를 발급해 인가 URL 의 `state` 파라미터로 함께 보낸다. 콜백에서 state 가 검증된다.",
         "operationId": "login_api_v1_auth_discord_login_get",
         "responses": {
           "307": {
-            "description": "Successful Response"
+            "description": "Discord 인가 페이지로의 307 리다이렉트"
           }
         }
       }
@@ -25,8 +25,8 @@
         "tags": [
           "auth"
         ],
-        "summary": "Callback",
-        "description": "Discord OAuth 콜백을 처리하고 자체 JWT를 발급한다.",
+        "summary": "Discord OAuth 콜백",
+        "description": "Discord OAuth2 Authorization Code Grant 의 콜백 단계. Discord 가 발급한 `code` 와 우리가 발급해 둔 `state` 를 검증한 뒤, Discord access token 교환 → 사용자 정보 조회 → DB upsert → 자체 JWT 발급 까지를 한 요청으로 처리하고, 프론트엔드로 토큰을 쿼리스트링에 실어 307 리다이렉트한다.\n\n## 시퀀스\n\n```mermaid\nsequenceDiagram\n    autonumber\n    participant FE as Frontend (React)\n    participant API as ku-helper API\n    participant DC as Discord\n    participant DB as PostgreSQL\n\n    FE->>API: GET /auth/discord/login\n    API->>API: state JWT 발급 (5분 만료)\n    API-->>FE: 307 → Discord 인가 URL\n    FE->>DC: Authorize (scope=identify, applications.commands<br/>integration_type=1)\n    DC-->>FE: 307 → /auth/discord/callback?code&state\n    FE->>API: GET /auth/discord/callback?code&state\n    API->>API: state 검증 (만료·서명)\n    API->>DC: POST /oauth2/token (code 교환)\n    DC-->>API: Discord access_token\n    API->>DC: GET /users/@me\n    DC-->>API: { id, username, ... }\n    API->>DB: upsert by discord_id<br/>(status=DELETED → ACTIVE 복귀)\n    API->>API: 자체 JWT 발급 (access 30분 / refresh 30일)\n    API-->>FE: 307 → {frontend_url}/?access_token=…&refresh_token=…\n    Note over API,DC: BackgroundTasks 환영 DM (신규 사용자 한정, 베스트 에포트)\n```\n\n## 정책 메모\n\n- **state 만료**: 5 분. 만료·서명 오류는 `INVALID_OAUTH_STATE` (401).\n- **scope**: `identify`, `applications.commands` 두 개. `applications.commands` 는 user-install (`integration_type=1`) 을 자동 성립시켜 mutual guild 없는 사용자에게도 DM 발송이 가능하도록 한다 (Discord 에러 50278 회피).\n- **`integration_type=1`**: 사용자 계정 설치 (USER_INSTALL). 길드 설치(0) 가 아니다.\n- **탈퇴 후 재로그인**: `User.status == DELETED` 이던 동일 `discord_id` 가 다시 로그인하면 `UserRepository.upsert_by_discord_id` 가 `status` 를 `ACTIVE` 로 되돌리고 기존 레코드를 재사용한다. 이때 `is_new_user=False` 가 유지되어 환영 DM 이 재발송되지 않는다.\n- **환영 DM**: `BackgroundTasks` 로 응답 종료 후 비동기 실행. 실패해도 로그인 흐름은 막지 않는다. Discord 봇 토큰으로 `POST /users/@me/channels` → `POST /channels/{id}/messages` 순서.\n- **토큰 전달 방식**: 현재 query string. 보안적으로 fragment 또는 short-lived auth code → 토큰 교환 엔드포인트로의 전환은 추후 과제.\n\n## 발생 가능한 에러\n\n| HTTP | code | 의미 |\n| --- | --- | --- |\n| 401 | `INVALID_OAUTH_STATE` | `state` 값이 위조되었거나 5분 만료를 초과 |\n| 502 | `DISCORD_TOKEN_EXCHANGE_FAILED` | Discord `/oauth2/token` 호출 실패 (네트워크·자격 증명 문제 포함) |\n| 502 | `DISCORD_USER_FETCH_FAILED` | Discord `/users/@me` 호출 실패 |\n\n응답 본문 포맷은 공통: `{\"code\": \"<SCREAMING_SNAKE>\", \"detail\": \"<한국어 메시지>\"}`.",
         "operationId": "callback_api_v1_auth_discord_callback_get",
         "parameters": [
           {
@@ -49,15 +49,14 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TokenRead"
-                }
-              }
-            }
+          "307": {
+            "description": "프론트엔드(`Settings.frontend_url`)로의 307 리다이렉트. 쿼리에 `access_token` 과 `refresh_token` 포함."
+          },
+          "401": {
+            "description": "state 위조 또는 만료 (INVALID_OAUTH_STATE)"
+          },
+          "502": {
+            "description": "Discord 토큰 교환 실패 (DISCORD_TOKEN_EXCHANGE_FAILED) 또는 Discord 사용자 정보 조회 실패 (DISCORD_USER_FETCH_FAILED)"
           },
           "422": {
             "description": "Validation Error",
@@ -77,12 +76,12 @@
         "tags": [
           "users"
         ],
-        "summary": "Get Me",
-        "description": "현재 로그인한 사용자 정보를 반환한다.",
+        "summary": "내 정보 조회",
+        "description": "현재 로그인한 사용자의 프로필을 반환한다. JWT access 토큰이 필요하며, 탈퇴(`status=DELETED`) 상태의 사용자는 401 `USER_DELETED` 로 차단된다.",
         "operationId": "get_me_api_v1_users_me_get",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "현재 로그인 사용자 프로필",
             "content": {
               "application/json": {
                 "schema": {
@@ -90,6 +89,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
           }
         },
         "security": [
@@ -102,12 +104,15 @@
         "tags": [
           "users"
         ],
-        "summary": "Delete Me",
-        "description": "현재 사용자 계정을 삭제(소프트 삭제)한다.",
+        "summary": "내 계정 삭제",
+        "description": "**소프트 삭제**. `User.status` 를 `DELETED` 로 전환하고, 같은 트랜잭션에서 해당 사용자의 알림 설정과 발송 이력을 **물리 삭제** 한다 (개인정보 최소화). 동일 Discord 계정이 재로그인하면 같은 레코드의 status 가 `ACTIVE` 로 복귀한다 (환영 DM 은 재발송되지 않음). 기존 access 토큰은 다음 요청에서 401 `USER_DELETED` 로 자동 무효화된다.",
         "operationId": "delete_me_api_v1_users_me_delete",
         "responses": {
           "204": {
-            "description": "Successful Response"
+            "description": "삭제 완료. 본문 없음"
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
           }
         },
         "security": [
@@ -120,8 +125,8 @@
         "tags": [
           "users"
         ],
-        "summary": "Update Me",
-        "description": "현재 사용자 정보를 수정한다. (미구현)",
+        "summary": "내 정보 수정 (미구현)",
+        "description": "정책 미결로 현재 미구현이다 (backend roadmap A-1). 호출 시 서버 내부에서 `NotImplementedError` 가 발생해 500 으로 전달된다. 수정 가능 필드가 정의되면 본 엔드포인트가 채워질 예정.",
         "operationId": "update_me_api_v1_users_me_patch",
         "requestBody": {
           "content": {
@@ -135,7 +140,7 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "(미구현) 수정된 사용자 프로필",
             "content": {
               "application/json": {
                 "schema": {
@@ -143,6 +148,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "501": {
+            "description": "현재 미구현 — 수정 가능 필드 정책 미결"
           },
           "422": {
             "description": "Validation Error",
@@ -167,12 +178,12 @@
         "tags": [
           "notifications"
         ],
-        "summary": "List Notifications",
-        "description": "현재 사용자의 모든 알림 설정을 반환한다.",
+        "summary": "내 알림 목록",
+        "description": "현재 사용자가 등록한 모든 알림 설정을 반환한다. 응답 배열의 각 항목은 `type` discriminator 로 TRANSIT / LUNCH / LIBRARY 중 하나의 스키마를 따른다.",
         "operationId": "list_notifications_api_v1_me_notifications_get",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "사용자가 보유한 모든 알림 설정 배열",
             "content": {
               "application/json": {
                 "schema": {
@@ -202,6 +213,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
           }
         },
         "security": [
@@ -214,8 +228,8 @@
         "tags": [
           "notifications"
         ],
-        "summary": "Create Notification",
-        "description": "새 알림 설정을 생성한다. type별 config 스키마는 Swagger의 oneOf로 노출된다.",
+        "summary": "알림 설정 생성",
+        "description": "새 알림 설정을 등록한다. 본문은 `type` 으로 분기되는 discriminated union (`TRANSIT` / `LUNCH` / `LIBRARY`). 동일 type 의 다중 등록을 허용한다 — 예: 출근·퇴근용 교통 알림 2 개. config 스키마는 type 별로 다르며 Swagger 의 oneOf 로 노출된다.",
         "operationId": "create_notification_api_v1_me_notifications_post",
         "requestBody": {
           "content": {
@@ -240,7 +254,7 @@
         },
         "responses": {
           "201": {
-            "description": "Successful Response",
+            "description": "생성된 알림 설정 (id, timestamps 포함)",
             "content": {
               "application/json": {
                 "schema": {
@@ -268,15 +282,113 @@
               }
             }
           },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
           "422": {
-            "description": "Validation Error",
+            "description": "요청 본문 또는 config 스키마 검증 실패"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/notifications/transit": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "교통 알림 목록만",
+        "description": "F-06 단발 도착·F-07 정기 간격 교통 알림(TRANSIT)만 반환한다.",
+        "operationId": "list_transit_notifications_api_v1_me_notifications_transit_get",
+        "responses": {
+          "200": {
+            "description": "사용자의 교통 알림 설정 배열",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "items": {
+                    "$ref": "#/components/schemas/_TransitRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Transit Notifications Api V1 Me Notifications Transit Get"
                 }
               }
             }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/notifications/lunch": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "점심 알림 목록만",
+        "description": "F-09~F-12 점심 알림(LUNCH)만 반환한다.",
+        "operationId": "list_lunch_notifications_api_v1_me_notifications_lunch_get",
+        "responses": {
+          "200": {
+            "description": "사용자의 점심 알림 설정 배열",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/_LunchRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Lunch Notifications Api V1 Me Notifications Lunch Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/notifications/library": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "도서관 알림 목록만",
+        "description": "F-13~F-15 도서관 좌석 알림(LIBRARY)만 반환한다.",
+        "operationId": "list_library_notifications_api_v1_me_notifications_library_get",
+        "responses": {
+          "200": {
+            "description": "사용자의 도서관 알림 설정 배열",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/_LibraryRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Library Notifications Api V1 Me Notifications Library Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
           }
         },
         "security": [
@@ -291,8 +403,8 @@
         "tags": [
           "notifications"
         ],
-        "summary": "Get Notification",
-        "description": "단일 알림 설정을 반환한다.",
+        "summary": "단일 알림 조회",
+        "description": "지정한 알림 설정 1 건을 반환한다. 본인 소유가 아니면 403, 존재하지 않으면 404.",
         "operationId": "get_notification_api_v1_me_notifications__notification_id__get",
         "security": [
           {
@@ -313,7 +425,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "단일 알림 설정",
             "content": {
               "application/json": {
                 "schema": {
@@ -341,6 +453,15 @@
               }
             }
           },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "403": {
+            "description": "본인 소유가 아닌 알림 설정에 접근 (NOTIFICATION_FORBIDDEN)"
+          },
+          "404": {
+            "description": "지정한 알림 설정이 존재하지 않음 (NOTIFICATION_NOT_FOUND)"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -357,8 +478,8 @@
         "tags": [
           "notifications"
         ],
-        "summary": "Delete Notification",
-        "description": "알림 설정을 삭제한다.",
+        "summary": "알림 삭제",
+        "description": "지정한 알림 설정 1 건을 삭제한다. 본인 소유가 아니면 403, 존재하지 않으면 404. 발송 이력(`notification_history`) 도 함께 정리된다 (cascade).",
         "operationId": "delete_notification_api_v1_me_notifications__notification_id__delete",
         "security": [
           {
@@ -379,7 +500,16 @@
         ],
         "responses": {
           "204": {
-            "description": "Successful Response"
+            "description": "삭제 완료. 본문 없음"
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "403": {
+            "description": "본인 소유가 아닌 알림 설정에 접근 (NOTIFICATION_FORBIDDEN)"
+          },
+          "404": {
+            "description": "지정한 알림 설정이 존재하지 않음 (NOTIFICATION_NOT_FOUND)"
           },
           "422": {
             "description": "Validation Error",
@@ -399,8 +529,8 @@
         "tags": [
           "notifications"
         ],
-        "summary": "Update Transit Notification",
-        "description": "교통 알림 설정을 부분 수정한다. config는 전체 교체.",
+        "summary": "교통 알림 수정",
+        "description": "교통 알림 설정을 부분 수정한다. `enabled` 만 변경하거나, `config` 를 같이 보내면 **기존 config 를 통째로 대체** 한다(부분 merge X). type 변경은 지원하지 않는다 — 다른 type 으로 바꾸려면 삭제 후 재생성.",
         "operationId": "update_transit_notification_api_v1_me_notifications_transit__notification_id__patch",
         "security": [
           {
@@ -431,7 +561,7 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "수정된 교통 알림 설정",
             "content": {
               "application/json": {
                 "schema": {
@@ -459,15 +589,17 @@
               }
             }
           },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "403": {
+            "description": "본인 소유가 아닌 알림 설정에 접근 (NOTIFICATION_FORBIDDEN)"
+          },
+          "404": {
+            "description": "지정한 알림 설정이 존재하지 않음 (NOTIFICATION_NOT_FOUND)"
+          },
           "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
+            "description": "요청 본문 또는 config 스키마 검증 실패"
           }
         }
       }
@@ -477,8 +609,8 @@
         "tags": [
           "notifications"
         ],
-        "summary": "Update Lunch Notification",
-        "description": "점심 알림 설정을 부분 수정한다. config는 전체 교체.",
+        "summary": "점심 알림 수정",
+        "description": "점심 알림 설정을 부분 수정한다. `config` 는 전체 교체 (부분 merge X).",
         "operationId": "update_lunch_notification_api_v1_me_notifications_lunch__notification_id__patch",
         "security": [
           {
@@ -509,7 +641,7 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "수정된 점심 알림 설정",
             "content": {
               "application/json": {
                 "schema": {
@@ -537,15 +669,17 @@
               }
             }
           },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "403": {
+            "description": "본인 소유가 아닌 알림 설정에 접근 (NOTIFICATION_FORBIDDEN)"
+          },
+          "404": {
+            "description": "지정한 알림 설정이 존재하지 않음 (NOTIFICATION_NOT_FOUND)"
+          },
           "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
+            "description": "요청 본문 또는 config 스키마 검증 실패"
           }
         }
       }
@@ -555,8 +689,8 @@
         "tags": [
           "notifications"
         ],
-        "summary": "Update Library Notification",
-        "description": "도서관 알림 설정을 부분 수정한다. config는 전체 교체.",
+        "summary": "도서관 알림 수정",
+        "description": "도서관 알림 설정을 부분 수정한다. `config` 는 전체 교체.",
         "operationId": "update_library_notification_api_v1_me_notifications_library__notification_id__patch",
         "security": [
           {
@@ -587,7 +721,7 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "수정된 도서관 알림 설정",
             "content": {
               "application/json": {
                 "schema": {
@@ -615,17 +749,144 @@
               }
             }
           },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "403": {
+            "description": "본인 소유가 아닌 알림 설정에 접근 (NOTIFICATION_FORBIDDEN)"
+          },
+          "404": {
+            "description": "지정한 알림 설정이 존재하지 않음 (NOTIFICATION_NOT_FOUND)"
+          },
           "422": {
-            "description": "Validation Error",
+            "description": "요청 본문 또는 config 스키마 검증 실패"
+          }
+        }
+      }
+    },
+    "/api/v1/me/immediate-send/lunch": {
+      "post": {
+        "tags": [
+          "immediate-send"
+        ],
+        "summary": "즉시 점심 DM 발송 요청",
+        "description": "현재 사용자에게 즉시 점심 DM 을 보내달라는 요청을 큐 테이블 (`immediate_send_requests`) 에 INSERT 하고 202 로 즉시 반환한다.\n\n**처리 흐름**: 봇 컨테이너가 5초 간격으로 큐를 폴링 → pending 행을 픽업 → 학식·맛집 데이터 크롤 → Discord DM 발송 → 큐 상태 업데이트.\n\n**쿨다운**: 동일 사용자의 미처리 요청이 큐에 남아 있으면 429 `IMMEDIATE_SEND_RATE_LIMITED` 로 거절된다. 이후 상태 조회 엔드포인트는 후속.",
+        "operationId": "dispatch_lunch_now_api_v1_me_immediate_send_lunch_post",
+        "responses": {
+          "202": {
+            "description": "큐 적재 결과 (request_id, requested_at)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/LunchDispatchResponse"
                 }
               }
             }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "429": {
+            "description": "동일 사용자의 처리 대기 요청이 이미 큐에 존재 (IMMEDIATE_SEND_RATE_LIMITED)"
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/immediate-send/transit": {
+      "post": {
+        "tags": [
+          "immediate-send"
+        ],
+        "summary": "즉시 교통 DM 발송 요청",
+        "description": "현재 사용자에게 지정한 역·호선의 지하철 도착 정보 DM 을 즉시 보내달라는 요청을 큐 테이블 (`immediate_send_requests`) 에 INSERT 하고 202 로 즉시 반환한다.\n\n**처리 흐름**: 봇 컨테이너가 5초 간격으로 큐를 폴링 → pending 행을 픽업 → 서울 공공 API 로 실시간 도착 조회 → Discord DM 발송 → 큐 상태 업데이트.\n\n**인증 필요**: `Authorization: Bearer <access>` 헤더. 401 사유는 `INVALID_TOKEN` 또는 `USER_DELETED`.\n\n**쿨다운**: 동일 사용자의 미처리 요청이 큐에 남아 있으면 429 `IMMEDIATE_SEND_RATE_LIMITED` 로 거절된다. 이후 상태 조회 엔드포인트는 후속.",
+        "operationId": "dispatch_transit_now_api_v1_me_immediate_send_transit_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitDispatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "큐 적재 결과 (request_id, requested_at)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransitDispatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "422": {
+            "description": "station_name·line 형식 검증 실패"
+          },
+          "429": {
+            "description": "동일 사용자의 처리 대기 요청이 이미 큐에 존재 (IMMEDIATE_SEND_RATE_LIMITED)"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/immediate-send/library": {
+      "post": {
+        "tags": [
+          "immediate-send"
+        ],
+        "summary": "즉시 도서관 좌석 DM 발송 요청",
+        "description": "현재 사용자에게 지정한 열람실의 현재 잔여 좌석 DM 을 즉시 보내달라는 요청을 큐 테이블 (`immediate_send_requests`) 에 INSERT 하고 202 로 즉시 반환한다.\n\n**처리 흐름**: 봇 컨테이너가 5초 간격으로 큐를 폴링 → pending 행을 픽업 → 도서관 좌석 API 조회 → Discord DM 발송 → 큐 상태 업데이트.\n\n**임계값 없음**: 즉시 발송은 1회성 현재 스냅샷이라 정기 알림의 임계값(F-13)·긴급 표시(F-15)는 적용되지 않는다. `reading_room_id=0` 은 전체 열람실 합산이다.\n\n**인증 필요**: `Authorization: Bearer <access>` 헤더. 401 사유는 `INVALID_TOKEN` 또는 `USER_DELETED`.\n\n**쿨다운**: 동일 사용자의 미처리 요청이 큐에 남아 있으면 429 `IMMEDIATE_SEND_RATE_LIMITED` 로 거절된다. 이후 상태 조회 엔드포인트는 후속.",
+        "operationId": "dispatch_library_now_api_v1_me_immediate_send_library_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LibraryDispatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "큐 적재 결과 (request_id, requested_at)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryDispatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "422": {
+            "description": "reading_room_id 가 0·1·2·3·5 외 값(예: 4)"
+          },
+          "429": {
+            "description": "동일 사용자의 처리 대기 요청이 이미 큐에 존재 (IMMEDIATE_SEND_RATE_LIMITED)"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/health": {
@@ -669,15 +930,28 @@
       "LibraryConfig": {
         "properties": {
           "reading_room_id": {
-            "type": "string",
-            "maxLength": 50,
-            "minLength": 1,
-            "title": "Reading Room Id"
+            "type": "integer",
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              5
+            ],
+            "title": "Reading Room Id",
+            "description": "대상 열람실 번호. 0·1·2·3·5 중 하나. 0 은 전체 열람실 잔여석 합산을 뜻한다(원 스펙 외 확장). 1·2·3·5 는 개별 열람실(제4열람실 미운영). 0(전체) 및 분리 운영되는 제1·제3열람실은 A/B 좌석을 합산해 잔여석을 계산한다.",
+            "examples": [
+              1
+            ]
           },
           "threshold": {
             "type": "integer",
             "minimum": 0.0,
-            "title": "Threshold"
+            "title": "Threshold",
+            "description": "알림 발동 잔여 좌석 임계값(개). 대상 잔여석(개별 열람실, 또는 0이면 전체 합산) ≤ threshold 로 떨어질 때 발송한다 (분리 열람실은 A/B 합산 기준).",
+            "examples": [
+              20
+            ]
           },
           "urgent_threshold": {
             "anyOf": [
@@ -689,7 +963,11 @@
                 "type": "null"
               }
             ],
-            "title": "Urgent Threshold"
+            "title": "Urgent Threshold",
+            "description": "긴급 임계값(개). 잔여석 ≤ urgent_threshold 면 임베드를 빨간색·'긴급' 표기로 강조한다(F-15). null 이면 긴급 표시를 쓰지 않으며, 값이 있으면 `threshold` 보다 엄격히 작아야 한다(같으면 긴급이 항상 일반 임계값과 동시에 발동해 강조 의미가 사라지므로 거절).",
+            "examples": [
+              5
+            ]
           }
         },
         "type": "object",
@@ -697,7 +975,72 @@
           "reading_room_id",
           "threshold"
         ],
-        "title": "LibraryConfig"
+        "title": "LibraryConfig",
+        "description": "도서관 좌석 알림 (F-13/F-14/F-15). 지정 열람실의 잔여 좌석이 임계값 이하로\n떨어지는 순간 DM 을 발송한다. 회복 후 재하락 전까지 재발송을 막는 중복 방지(F-14)와\n긴급 임계값 강조(F-15)는 발송 측에서 처리한다. 정기 현황 알림은 범위 밖이다."
+      },
+      "LibraryDispatchRequest": {
+        "properties": {
+          "reading_room_id": {
+            "type": "integer",
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              5
+            ],
+            "title": "Reading Room Id",
+            "description": "대상 열람실 번호. 0·1·2·3·5 중 하나. 0 은 전체 열람실 잔여석 합산, 1·2·3·5 는 개별 열람실(제4열람실 미운영). 분리 운영되는 제1·제3열람실과 0(전체)은 봇이 A/B 좌석을 합산해 계산한다. 정기 알림의 `LibraryConfig` 와 동일한 의미다.",
+            "examples": [
+              1
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reading_room_id"
+        ],
+        "title": "LibraryDispatchRequest",
+        "description": "`POST /me/immediate-send/library` 의 요청 body.\n\n\"지금 이 열람실 잔여 좌석을 알려줘\" 1회성 요청이다. 임계값 알림(F-13)·중복 방지\n(F-14)·긴급 표시(F-15)는 정기 알림 설정에서 다루고, 즉시 발송은 현재 스냅샷만\n보내므로 `reading_room_id` 하나만 받는다.",
+        "examples": [
+          {
+            "reading_room_id": 1
+          }
+        ]
+      },
+      "LibraryDispatchResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "큐 적재 row 의 PK. 후속 상태 조회·로그 추적용.",
+            "examples": [
+              53
+            ]
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At",
+            "description": "서버가 요청을 INSERT 한 시각 (ISO 8601, UTC).",
+            "examples": [
+              "2026-05-21T02:10:00+00:00"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "requested_at"
+        ],
+        "title": "LibraryDispatchResponse",
+        "description": "`POST /me/immediate-send/library` 의 202 응답.\n\nAPI 는 큐 테이블 (`immediate_send_requests`) 에 한 줄을 INSERT 하고 즉시 반환한다.\n실제 좌석 조회와 Discord DM 발송은 봇 컨테이너의 폴링 잡(5초 간격)이 수행.\n`Lunch/TransitDispatchResponse` 와 응답 포맷은 동일하지만 도메인 의미가 달라 별도 모델로 둔다.",
+        "examples": [
+          {
+            "request_id": 53,
+            "requested_at": "2026-05-21T02:10:00+00:00"
+          }
+        ]
       },
       "LibraryUpdate": {
         "properties": {
@@ -710,7 +1053,8 @@
                 "type": "null"
               }
             ],
-            "title": "Enabled"
+            "title": "Enabled",
+            "description": "활성화 토글."
           },
           "config": {
             "anyOf": [
@@ -720,18 +1064,36 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "새 config. 기존 config 를 통째로 대체."
           }
         },
         "type": "object",
-        "title": "LibraryUpdate"
+        "title": "LibraryUpdate",
+        "description": "도서관 알림 부분 수정. `config` 는 전체 교체.",
+        "examples": [
+          {
+            "enabled": true
+          },
+          {
+            "config": {
+              "reading_room_id": 1,
+              "threshold": 30,
+              "urgent_threshold": 10
+            }
+          }
+        ]
       },
       "LunchConfig": {
         "properties": {
           "notify_at": {
             "type": "string",
             "format": "time",
-            "title": "Notify At"
+            "title": "Notify At",
+            "description": "알림 발송 시각 (24h). 보통 점심 30~60 분 전을 권장.",
+            "examples": [
+              "11:00:00"
+            ]
           },
           "max_price": {
             "anyOf": [
@@ -743,18 +1105,27 @@
                 "type": "null"
               }
             ],
-            "title": "Max Price"
+            "title": "Max Price",
+            "description": "맛집 추천에 적용할 1 인 기준 최대 가격(원). null 이면 제한 없음.",
+            "examples": [
+              12000
+            ]
           },
           "recommend_count": {
             "type": "integer",
             "maximum": 10.0,
             "minimum": 1.0,
             "title": "Recommend Count",
-            "default": 3
+            "description": "맛집 추천 개수(1~10). 학식 메뉴와 별도로 외부 식당을 추가 추천.",
+            "default": 3,
+            "examples": [
+              3
+            ]
           },
           "highlight_today_pick": {
             "type": "boolean",
             "title": "Highlight Today Pick",
+            "description": "추천 중 1곳을 '오늘의 픽' 으로 하이라이트할지 여부.",
             "default": true
           }
         },
@@ -762,7 +1133,39 @@
         "required": [
           "notify_at"
         ],
-        "title": "LunchConfig"
+        "title": "LunchConfig",
+        "description": "점심 알림 설정. 지정 시각에 학식 메뉴와 추천 맛집을 DM 으로 전달한다."
+      },
+      "LunchDispatchResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "큐 적재 row 의 PK. 후속 상태 조회·로그 추적용.",
+            "examples": [
+              17
+            ]
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At",
+            "description": "서버가 요청을 INSERT 한 시각 (ISO 8601, UTC)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "requested_at"
+        ],
+        "title": "LunchDispatchResponse",
+        "description": "`POST /me/immediate-send/lunch` 의 202 응답.\n\nAPI 는 큐 테이블 (`immediate_send_requests`) 에 한 줄을 INSERT 하고 즉시 반환한다.\n실제 학식·맛집 조회와 Discord DM 발송은 봇 컨테이너의 폴링 잡(5초 간격)이 수행.\n클라이언트는 `request_id` 로 후속 상태 조회를 할 수 있다(상태 엔드포인트는 후속).",
+        "examples": [
+          {
+            "request_id": 17,
+            "requested_at": "2026-05-20T11:25:30+00:00"
+          }
+        ]
       },
       "LunchUpdate": {
         "properties": {
@@ -775,7 +1178,8 @@
                 "type": "null"
               }
             ],
-            "title": "Enabled"
+            "title": "Enabled",
+            "description": "활성화 토글."
           },
           "config": {
             "anyOf": [
@@ -785,34 +1189,97 @@
               {
                 "type": "null"
               }
+            ],
+            "description": "새 config. 기존 config 를 통째로 대체."
+          }
+        },
+        "type": "object",
+        "title": "LunchUpdate",
+        "description": "점심 알림 부분 수정. `config` 는 전체 교체.",
+        "examples": [
+          {
+            "enabled": false
+          },
+          {
+            "config": {
+              "highlight_today_pick": false,
+              "max_price": 15000,
+              "notify_at": "11:30:00",
+              "recommend_count": 5
+            }
+          }
+        ]
+      },
+      "TransitDispatchRequest": {
+        "properties": {
+          "station_name": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Station Name",
+            "description": "서울 지하철 역 이름 (한글). 봇이 서울 공공 API 의 `stationName` 파라미터로 그대로 전달하므로 공공 API 의 역명 표기와 일치해야 한다.",
+            "examples": [
+              "강남"
+            ]
+          },
+          "line": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Line",
+            "description": "호선 표기. '2호선', '경의중앙선' 등 한글 표기 그대로. 봇이 임베드 title·필터 표현에 사용한다.",
+            "examples": [
+              "2호선"
             ]
           }
         },
         "type": "object",
-        "title": "LunchUpdate"
+        "required": [
+          "station_name",
+          "line"
+        ],
+        "title": "TransitDispatchRequest",
+        "description": "`POST /me/immediate-send/transit` 의 요청 body.\n\nF-07 정기 교통 알림과 동일한 두 필수 키 (`station_name`, `line`) 만 받는다.\n즉시 발송은 1회성이라 정기 알림의 활성 시간대(`start_time`/`end_time`)·반복 주기\n(`repeat_interval_minutes`) 는 의미가 없어 받지 않는다.",
+        "examples": [
+          {
+            "line": "2호선",
+            "station_name": "강남"
+          }
+        ]
       },
-      "TokenRead": {
+      "TransitDispatchResponse": {
         "properties": {
-          "access_token": {
-            "type": "string",
-            "title": "Access Token"
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "큐 적재 row 의 PK. 후속 상태 조회·로그 추적용.",
+            "examples": [
+              42
+            ]
           },
-          "refresh_token": {
+          "requested_at": {
             "type": "string",
-            "title": "Refresh Token"
-          },
-          "token_type": {
-            "type": "string",
-            "title": "Token Type",
-            "default": "bearer"
+            "format": "date-time",
+            "title": "Requested At",
+            "description": "서버가 요청을 INSERT 한 시각 (ISO 8601, UTC).",
+            "examples": [
+              "2026-05-20T11:25:30+00:00"
+            ]
           }
         },
         "type": "object",
         "required": [
-          "access_token",
-          "refresh_token"
+          "request_id",
+          "requested_at"
         ],
-        "title": "TokenRead"
+        "title": "TransitDispatchResponse",
+        "description": "`POST /me/immediate-send/transit` 의 202 응답.\n\nAPI 는 큐 테이블 (`immediate_send_requests`) 에 한 줄을 INSERT 하고 즉시 반환한다.\n실제 도착 정보 조회와 Discord DM 발송은 봇 컨테이너의 폴링 잡(5초 간격)이 수행.\n`LunchDispatchResponse` 와 응답 포맷은 동일하지만 도메인 의미가 다르므로 별도 모델로 둔다.",
+        "examples": [
+          {
+            "request_id": 42,
+            "requested_at": "2026-05-20T11:25:30+00:00"
+          }
+        ]
       },
       "TransitUpdate": {
         "properties": {
@@ -825,7 +1292,8 @@
                 "type": "null"
               }
             ],
-            "title": "Enabled"
+            "title": "Enabled",
+            "description": "활성화 토글. null 이면 변경하지 않음."
           },
           "config": {
             "anyOf": [
@@ -850,35 +1318,67 @@
                 "type": "null"
               }
             ],
-            "title": "Config"
+            "title": "Config",
+            "description": "새 config. null 이 아니면 기존 config 를 통째로 대체."
           }
         },
         "type": "object",
-        "title": "TransitUpdate"
+        "title": "TransitUpdate",
+        "description": "교통 알림 부분 수정. `config` 를 함께 보내면 **전체 교체** 된다 (부분 merge X).",
+        "examples": [
+          {
+            "enabled": false
+          },
+          {
+            "config": {
+              "end_time": "10:00:00",
+              "include_congestion": true,
+              "line": "4호선",
+              "mode": "recurring",
+              "repeat_interval_minutes": 5,
+              "start_time": "08:00:00",
+              "station_name": "성신여대입구"
+            }
+          }
+        ]
       },
       "UserRead": {
         "properties": {
           "id": {
             "type": "integer",
-            "title": "Id"
+            "title": "Id",
+            "description": "ku-helper 자체 PK. 우리 서버 안에서만 의미가 있다.",
+            "examples": [
+              42
+            ]
           },
           "discord_id": {
             "type": "integer",
-            "title": "Discord Id"
+            "title": "Discord Id",
+            "description": "Discord Snowflake (64-bit). DM 발송·OAuth 식별에 쓰인다.",
+            "examples": [
+              123456789012345678
+            ]
           },
           "discord_username": {
             "type": "string",
-            "title": "Discord Username"
+            "title": "Discord Username",
+            "description": "로그인 시점에 캐시한 Discord 사용자명. 갱신은 재로그인 시.",
+            "examples": [
+              "kustudent"
+            ]
           },
           "created_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Created At"
+            "title": "Created At",
+            "description": "레코드 최초 생성 시각 (ISO 8601, UTC)."
           },
           "updated_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Updated At"
+            "title": "Updated At",
+            "description": "마지막 갱신 시각. 재로그인·소프트 삭제·복귀 시 변경된다."
           }
         },
         "type": "object",
@@ -889,12 +1389,23 @@
           "created_at",
           "updated_at"
         ],
-        "title": "UserRead"
+        "title": "UserRead",
+        "description": "현재 로그인한 사용자 프로필.\n\n`discord_id` 는 Discord 의 64-bit Snowflake. 동일 Discord 계정이 탈퇴 후\n재로그인하면 같은 `id`/`discord_id` 로 status 만 ACTIVE 복귀한다.",
+        "examples": [
+          {
+            "created_at": "2026-01-15T12:34:56+00:00",
+            "discord_id": 123456789012345678,
+            "discord_username": "kustudent",
+            "id": 42,
+            "updated_at": "2026-05-20T03:21:09+00:00"
+          }
+        ]
       },
       "UserUpdate": {
         "properties": {},
         "type": "object",
-        "title": "UserUpdate"
+        "title": "UserUpdate",
+        "description": "PATCH /users/me 본문. 현재 미구현 — 정책 미결로 수정 가능 필드가 없다.\n\n후속 PR (백엔드 roadmap A-1) 에서 `discord_username` 캐시 동기화 등을 정의한다."
       },
       "ValidationError": {
         "properties": {
@@ -941,11 +1452,13 @@
           "type": {
             "type": "string",
             "const": "LIBRARY",
-            "title": "Type"
+            "title": "Type",
+            "description": "알림 분류 discriminator. 항상 'LIBRARY'."
           },
           "enabled": {
             "type": "boolean",
             "title": "Enabled",
+            "description": "생성 직후 활성화 여부.",
             "default": true
           },
           "config": {
@@ -957,26 +1470,48 @@
           "type",
           "config"
         ],
-        "title": "_LibraryCreate"
+        "title": "_LibraryCreate",
+        "description": "도서관 알림 생성 본문.",
+        "examples": [
+          {
+            "config": {
+              "reading_room_id": 1,
+              "threshold": 20,
+              "urgent_threshold": 5
+            },
+            "enabled": true,
+            "type": "LIBRARY"
+          }
+        ]
       },
       "_LibraryRead": {
         "properties": {
           "id": {
             "type": "integer",
-            "title": "Id"
+            "title": "Id",
+            "description": "알림 설정 PK.",
+            "examples": [
+              13
+            ]
           },
           "user_id": {
             "type": "integer",
-            "title": "User Id"
+            "title": "User Id",
+            "description": "소유자 user.id.",
+            "examples": [
+              42
+            ]
           },
           "type": {
             "type": "string",
             "const": "LIBRARY",
-            "title": "Type"
+            "title": "Type",
+            "description": "알림 분류. 항상 'LIBRARY'."
           },
           "enabled": {
             "type": "boolean",
-            "title": "Enabled"
+            "title": "Enabled",
+            "description": "활성화 여부."
           },
           "config": {
             "$ref": "#/components/schemas/LibraryConfig"
@@ -984,12 +1519,14 @@
           "created_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Created At"
+            "title": "Created At",
+            "description": "최초 생성 시각."
           },
           "updated_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Updated At"
+            "title": "Updated At",
+            "description": "마지막 갱신 시각."
           }
         },
         "type": "object",
@@ -1002,18 +1539,36 @@
           "created_at",
           "updated_at"
         ],
-        "title": "_LibraryRead"
+        "title": "_LibraryRead",
+        "description": "도서관 알림 응답 본문.",
+        "examples": [
+          {
+            "config": {
+              "reading_room_id": 1,
+              "threshold": 20,
+              "urgent_threshold": 5
+            },
+            "created_at": "2026-05-20T03:23:00+00:00",
+            "enabled": true,
+            "id": 13,
+            "type": "LIBRARY",
+            "updated_at": "2026-05-20T03:23:00+00:00",
+            "user_id": 42
+          }
+        ]
       },
       "_LunchCreate": {
         "properties": {
           "type": {
             "type": "string",
             "const": "LUNCH",
-            "title": "Type"
+            "title": "Type",
+            "description": "알림 분류 discriminator. 항상 'LUNCH'."
           },
           "enabled": {
             "type": "boolean",
             "title": "Enabled",
+            "description": "생성 직후 활성화 여부.",
             "default": true
           },
           "config": {
@@ -1025,26 +1580,49 @@
           "type",
           "config"
         ],
-        "title": "_LunchCreate"
+        "title": "_LunchCreate",
+        "description": "점심 알림 생성 본문.",
+        "examples": [
+          {
+            "config": {
+              "highlight_today_pick": true,
+              "max_price": 12000,
+              "notify_at": "11:00:00",
+              "recommend_count": 3
+            },
+            "enabled": true,
+            "type": "LUNCH"
+          }
+        ]
       },
       "_LunchRead": {
         "properties": {
           "id": {
             "type": "integer",
-            "title": "Id"
+            "title": "Id",
+            "description": "알림 설정 PK.",
+            "examples": [
+              12
+            ]
           },
           "user_id": {
             "type": "integer",
-            "title": "User Id"
+            "title": "User Id",
+            "description": "소유자 user.id.",
+            "examples": [
+              42
+            ]
           },
           "type": {
             "type": "string",
             "const": "LUNCH",
-            "title": "Type"
+            "title": "Type",
+            "description": "알림 분류. 항상 'LUNCH'."
           },
           "enabled": {
             "type": "boolean",
-            "title": "Enabled"
+            "title": "Enabled",
+            "description": "활성화 여부."
           },
           "config": {
             "$ref": "#/components/schemas/LunchConfig"
@@ -1052,12 +1630,14 @@
           "created_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Created At"
+            "title": "Created At",
+            "description": "최초 생성 시각."
           },
           "updated_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Updated At"
+            "title": "Updated At",
+            "description": "마지막 갱신 시각."
           }
         },
         "type": "object",
@@ -1070,36 +1650,99 @@
           "created_at",
           "updated_at"
         ],
-        "title": "_LunchRead"
+        "title": "_LunchRead",
+        "description": "점심 알림 응답 본문.",
+        "examples": [
+          {
+            "config": {
+              "highlight_today_pick": true,
+              "max_price": 12000,
+              "notify_at": "11:00:00",
+              "recommend_count": 3
+            },
+            "created_at": "2026-05-20T03:22:00+00:00",
+            "enabled": true,
+            "id": 12,
+            "type": "LUNCH",
+            "updated_at": "2026-05-20T03:22:00+00:00",
+            "user_id": 42
+          }
+        ]
       },
       "_TransitArrival": {
         "properties": {
           "mode": {
             "type": "string",
             "const": "arrival",
-            "title": "Mode"
+            "title": "Mode",
+            "description": "단발 모드 식별자. 'arrival' 은 윈도우 내 열차별로 도착 N 분 전 1회 발송."
           },
           "station_name": {
             "type": "string",
             "maxLength": 50,
             "minLength": 1,
-            "title": "Station Name"
+            "title": "Station Name",
+            "description": "서울 지하철 역 이름(한글). 공공 API 의 역명과 동일해야 매칭된다.",
+            "examples": [
+              "성신여대입구"
+            ]
           },
           "line": {
             "type": "string",
             "maxLength": 20,
             "minLength": 1,
-            "title": "Line"
+            "title": "Line",
+            "description": "호선 한글 표기. '4호선', '경의중앙선' 등.",
+            "examples": [
+              "4호선"
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "상행",
+              "하행",
+              "내선",
+              "외선"
+            ],
+            "title": "Direction",
+            "description": "방향. 공공 API `updnLine` 과 동일 값. 1·3·4호선 등은 '상행'/'하행', 2·5호선 등 순환선은 '내선'/'외선'.",
+            "examples": [
+              "상행"
+            ]
+          },
+          "start_time": {
+            "type": "string",
+            "format": "time",
+            "title": "Start Time",
+            "description": "윈도우 시작 시각 (24h 'HH:MM' 또는 'HH:MM:SS'). 서버 로컬 KST.",
+            "examples": [
+              "08:00:00"
+            ]
+          },
+          "end_time": {
+            "type": "string",
+            "format": "time",
+            "title": "End Time",
+            "description": "윈도우 종료 시각. `start_time` 보다 늦어야 한다 (validator).",
+            "examples": [
+              "10:00:00"
+            ]
           },
           "minutes_before": {
             "type": "integer",
             "maximum": 120.0,
             "minimum": 1.0,
-            "title": "Minutes Before"
+            "title": "Minutes Before",
+            "description": "도착 N 분 전 알림. 1~120 분.",
+            "examples": [
+              10
+            ]
           },
           "include_congestion": {
             "type": "boolean",
             "title": "Include Congestion",
+            "description": "혼잡도 정보 포함 여부. 공공 API 가 제공할 때만 유효.",
             "default": true
           }
         },
@@ -1108,21 +1751,26 @@
           "mode",
           "station_name",
           "line",
+          "direction",
+          "start_time",
+          "end_time",
           "minutes_before"
         ],
         "title": "_TransitArrival",
-        "description": "F-06 단발 도착 알림: 특정 시각에 N분 전 한 번 발송."
+        "description": "F-06 단발 도착 알림: `[start_time, end_time]` 윈도우 내 도착하는 모든 열차에 대해\n`minutes_before` 도달 시 train_no 단위로 1회씩 발송한다.\n\n`_TransitCreate` 의 `config` 필드로 wrap 되어 외부에 노출된다. 단독으로\n클라이언트가 다루지 않는다."
       },
       "_TransitCreate": {
         "properties": {
           "type": {
             "type": "string",
             "const": "TRANSIT",
-            "title": "Type"
+            "title": "Type",
+            "description": "알림 분류 discriminator. 항상 'TRANSIT'."
           },
           "enabled": {
             "type": "boolean",
             "title": "Enabled",
+            "description": "생성 직후 활성화 여부. false 면 발송되지 않음.",
             "default": true
           },
           "config": {
@@ -1149,26 +1797,53 @@
           "type",
           "config"
         ],
-        "title": "_TransitCreate"
+        "title": "_TransitCreate",
+        "description": "교통 알림 생성 본문. `config.mode` 로 단발/정기를 다시 분기.",
+        "examples": [
+          {
+            "config": {
+              "direction": "상행",
+              "end_time": "10:00:00",
+              "include_congestion": true,
+              "line": "4호선",
+              "minutes_before": 10,
+              "mode": "arrival",
+              "start_time": "08:00:00",
+              "station_name": "성신여대입구"
+            },
+            "enabled": true,
+            "type": "TRANSIT"
+          }
+        ]
       },
       "_TransitRead": {
         "properties": {
           "id": {
             "type": "integer",
-            "title": "Id"
+            "title": "Id",
+            "description": "알림 설정 PK.",
+            "examples": [
+              11
+            ]
           },
           "user_id": {
             "type": "integer",
-            "title": "User Id"
+            "title": "User Id",
+            "description": "소유자 user.id.",
+            "examples": [
+              42
+            ]
           },
           "type": {
             "type": "string",
             "const": "TRANSIT",
-            "title": "Type"
+            "title": "Type",
+            "description": "알림 분류. 항상 'TRANSIT'."
           },
           "enabled": {
             "type": "boolean",
-            "title": "Enabled"
+            "title": "Enabled",
+            "description": "활성화 여부."
           },
           "config": {
             "oneOf": [
@@ -1191,12 +1866,14 @@
           "created_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Created At"
+            "title": "Created At",
+            "description": "최초 생성 시각 (ISO 8601, UTC)."
           },
           "updated_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Updated At"
+            "title": "Updated At",
+            "description": "마지막 갱신 시각."
           }
         },
         "type": "object",
@@ -1209,46 +1886,89 @@
           "created_at",
           "updated_at"
         ],
-        "title": "_TransitRead"
+        "title": "_TransitRead",
+        "description": "교통 알림 응답 본문.",
+        "examples": [
+          {
+            "config": {
+              "direction": "상행",
+              "end_time": "10:00:00",
+              "include_congestion": true,
+              "line": "4호선",
+              "minutes_before": 10,
+              "mode": "arrival",
+              "start_time": "08:00:00",
+              "station_name": "성신여대입구"
+            },
+            "created_at": "2026-05-20T03:21:09+00:00",
+            "enabled": true,
+            "id": 11,
+            "type": "TRANSIT",
+            "updated_at": "2026-05-20T03:21:09+00:00",
+            "user_id": 42
+          }
+        ]
       },
       "_TransitRecurring": {
         "properties": {
           "mode": {
             "type": "string",
             "const": "recurring",
-            "title": "Mode"
+            "title": "Mode",
+            "description": "정기 모드 식별자. 'recurring' 은 시간대 내 N 분 간격 반복."
           },
           "station_name": {
             "type": "string",
             "maxLength": 50,
             "minLength": 1,
-            "title": "Station Name"
+            "title": "Station Name",
+            "description": "서울 지하철 역 이름(한글). 공공 API 의 역명과 동일.",
+            "examples": [
+              "성신여대입구"
+            ]
           },
           "line": {
             "type": "string",
             "maxLength": 20,
             "minLength": 1,
-            "title": "Line"
+            "title": "Line",
+            "description": "호선 한글 표기.",
+            "examples": [
+              "4호선"
+            ]
           },
           "start_time": {
             "type": "string",
             "format": "time",
-            "title": "Start Time"
+            "title": "Start Time",
+            "description": "반복 시작 시각 (24h 'HH:MM' 또는 'HH:MM:SS'). 서버 로컬 시간.",
+            "examples": [
+              "08:00:00"
+            ]
           },
           "end_time": {
             "type": "string",
             "format": "time",
-            "title": "End Time"
+            "title": "End Time",
+            "description": "반복 종료 시각. `start_time` 보다 늦어야 한다 (validator).",
+            "examples": [
+              "10:00:00"
+            ]
           },
           "repeat_interval_minutes": {
             "type": "integer",
             "maximum": 180.0,
             "minimum": 1.0,
-            "title": "Repeat Interval Minutes"
+            "title": "Repeat Interval Minutes",
+            "description": "반복 간격(분). 1~180 분.",
+            "examples": [
+              5
+            ]
           },
           "include_congestion": {
             "type": "boolean",
             "title": "Include Congestion",
+            "description": "혼잡도 정보 포함 여부.",
             "default": true
           }
         },
@@ -1262,7 +1982,7 @@
           "repeat_interval_minutes"
         ],
         "title": "_TransitRecurring",
-        "description": "F-07 정기 간격 알림: 시작·종료 시각 사이 N분마다 반복 발송."
+        "description": "F-07 정기 간격 알림: 시작·종료 시각 사이 N분마다 반복 발송한다.\n\n`_TransitCreate` 의 `config` 필드로 wrap 되어 외부에 노출된다."
       }
     },
     "securitySchemes": {

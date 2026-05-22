@@ -17,9 +17,8 @@ class Settings(BaseSettings):
 
     database_url: str
 
-    # §0 부트스트랩 단계에서는 Redis 없이도 기동 가능하도록 옵셔널.
-    # §A(Sender)에서 캐시·쿨다운 키가 도입되면 필수화한다.
-    redis_url: str | None = None
+    # 외부 API 캐시·LIBRARY 상태머신·TRANSIT arrival dedup 공용. 미설정 시 봇 기동 실패.
+    redis_url: str
 
     discord_bot_token: SecretStr
 
@@ -28,6 +27,18 @@ class Settings(BaseSettings):
 
     # §B(교통 알림)에서 필수화. 현재는 None 허용.
     subway_api_key: SecretStr | None = None
+
+    # §C(점심 알림) — Naver Local Search API 키. RestaurantsClient 가 사용.
+    # 미설정 시 RestaurantsClient 가 즉시 RestaurantsCrawlerFailed 를 던진다.
+    naver_search_client_id: str | None = None
+    naver_search_client_secret: SecretStr | None = None
+
+    # 건국대 학식 페이지 URL. LunchClient 가 Playwright 로 크롤링.
+    cafeteria_url: str = "https://www.konkuk.ac.kr/general/18211/subview.do"
+
+    # §D 도서관 좌석 API. example-response.json 형태의 JSON 을 반환하는 엔드포인트.
+    # 미설정 시 LibraryClient 가 즉시 LibraryCrawlerFailed 를 던지고 library worker 는 skip.
+    library_seat_url: str | None = None
 
 
 @lru_cache

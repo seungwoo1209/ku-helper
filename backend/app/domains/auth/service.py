@@ -4,13 +4,21 @@ import structlog
 from httpx_oauth.clients.discord import DiscordOAuth2
 from httpx_oauth.exceptions import GetProfileError
 from httpx_oauth.oauth2 import GetAccessTokenError
+from redis.asyncio import Redis
 
 from app.core.config import Settings
 from app.core.discord import DiscordBotApiError, DiscordBotClient
 from app.core.security import (
+    InvalidAuthToken,
+    TokenType,
+    assert_refresh_jti_active,
+    consume_state_jti,
     create_access_token,
     create_refresh_token,
     create_state_token,
+    decode_token,
+    register_refresh_jti,
+    revoke_refresh_jti,
     verify_state_token,
 )
 from app.domains.auth.exceptions import (
@@ -39,11 +47,13 @@ class AuthService:
         oauth_client: DiscordOAuth2,
         bot_client: DiscordBotClient,
         user_repository: UserRepository,
+        redis: Redis,
         settings: Settings,
     ) -> None:
         self._oauth = oauth_client
         self._bot = bot_client
         self._users = user_repository
+        self._redis = redis
         self._settings = settings
 
     async def build_login_url(self) -> str:
@@ -60,10 +70,16 @@ class AuthService:
         )
 
     async def handle_callback(self, code: str, state: str) -> AuthCallbackResult:
-        # 1. state 검증.
+        # 1. state 검증 + 1회용 잠금. JWT 서명·만료 검증을 통과하더라도 같은 jti 로
+        # 다시 콜백이 오면 InvalidAuthToken → InvalidOAuthState 로 재포장한다.
         try:
-            verify_state_token(state)
-        except Exception as exc:
+            payload = verify_state_token(state)
+            state_jti = str(payload["jti"])
+        except (InvalidAuthToken, KeyError, TypeError) as exc:
+            raise InvalidOAuthState() from exc
+        try:
+            await consume_state_jti(self._redis, state_jti)
+        except InvalidAuthToken as exc:
             raise InvalidOAuthState() from exc
 
         # 2. 토큰 교환.
@@ -91,15 +107,46 @@ class AuthService:
             discord_id, discord_username
         )
 
-        # 5. 자체 JWT 발급 + 결과 패키징.
+        # 5. 자체 JWT 발급 + refresh jti 를 Redis whitelist 에 등록.
+        refresh_token, refresh_jti = create_refresh_token(user.id, user.discord_id)
+        await register_refresh_jti(self._redis, refresh_jti, user.id)
+
         return AuthCallbackResult(
             token=TokenRead(
                 access_token=create_access_token(user.id, user.discord_id),
-                refresh_token=create_refresh_token(user.id, user.discord_id),
+                refresh_token=refresh_token,
             ),
             discord_id=user.discord_id,
             is_new_user=created,
         )
+
+    async def refresh_tokens(self, refresh_token: str) -> TokenRead:
+        """Refresh JWT 검증 + rotation. old jti DEL → 새 access/refresh 발급 + new jti SET."""
+        payload = decode_token(refresh_token, TokenType.REFRESH)
+        old_jti = str(payload["jti"])
+        try:
+            user_id = int(payload["sub"])
+            discord_id = int(payload["discord_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            # decode_token 통과 후 payload 형상이 어긋난 케이스 — 무효 처리.
+            raise InvalidAuthToken() from exc
+
+        await assert_refresh_jti_active(self._redis, old_jti)
+        await revoke_refresh_jti(self._redis, old_jti)
+
+        new_refresh_token, new_jti = create_refresh_token(user_id, discord_id)
+        await register_refresh_jti(self._redis, new_jti, user_id)
+
+        return TokenRead(
+            access_token=create_access_token(user_id, discord_id),
+            refresh_token=new_refresh_token,
+        )
+
+    async def logout(self, refresh_token: str) -> None:
+        """Refresh jti 를 whitelist 에서 제거. 이미 없어도 idempotent."""
+        payload = decode_token(refresh_token, TokenType.REFRESH)
+        jti = str(payload["jti"])
+        await revoke_refresh_jti(self._redis, jti)
 
     async def maybe_send_welcome_dm(self, discord_id: int, is_new_user: bool) -> None:
         # 신규 가입자에게만 1회 환영 DM. 실패는 베스트 에포트.

@@ -108,6 +108,34 @@ class Notification(Base):
     )
 
 
+class ImmediateSendRequest(Base):
+    """백엔드 0005 마이그레이션의 immediate_send_requests 와 형상 일치.
+
+    봇은 SELECT 만 — INSERT/UPDATE/DELETE 메서드를 정의하지 않는다.
+    """
+
+    __tablename__ = "immediate_send_requests"
+    __table_args__ = (Index("ix_immediate_send_requests_type_id", "type", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    type: Mapped[NotificationType] = mapped_column(
+        Enum(NotificationType, name="notification_type", create_type=False),
+        nullable=False,
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class NotificationHistory(Base):
     __tablename__ = "notification_history"
     __table_args__ = (
@@ -115,6 +143,12 @@ class NotificationHistory(Base):
             "ix_notification_history_user_id_sent_at",
             "user_id",
             "sent_at",
+        ),
+        Index(
+            "uq_notification_history_immediate_send_request_id",
+            "immediate_send_request_id",
+            unique=True,
+            postgresql_where="immediate_send_request_id IS NOT NULL",
         ),
     )
 
@@ -124,6 +158,11 @@ class NotificationHistory(Base):
         ForeignKey("notifications.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    immediate_send_request_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("immediate_send_requests.id", ondelete="SET NULL"),
+        nullable=True,
     )
     user_id: Mapped[int] = mapped_column(
         Integer,

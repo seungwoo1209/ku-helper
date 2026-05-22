@@ -11,7 +11,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import AppException
 from app.core.logging import configure_logging
-from routes.lunch import router as lunch_router
+from app.core.redis import create_redis_client
 
 configure_logging()
 logger = structlog.get_logger(__name__)
@@ -19,14 +19,19 @@ logger = structlog.get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
     http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
     app.state.http_client = http_client
+
+    redis_client = await create_redis_client(settings.redis_url)
+    app.state.redis = redis_client
 
     logger.info("lifespan_startup")
     try:
         yield
     finally:
         await http_client.aclose()
+        await redis_client.aclose()
         logger.info("lifespan_shutdown")
 
 
@@ -52,7 +57,6 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(api_router)
-    app.include_router(lunch_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

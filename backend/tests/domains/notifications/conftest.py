@@ -24,6 +24,9 @@ async def notification_factory(db_session: AsyncSession) -> NotificationFactory:
                     "mode": "arrival",
                     "station_name": "건대입구",
                     "line": "2",
+                    "direction": "내선",
+                    "start_time": "08:00:00",
+                    "end_time": "10:00:00",
                     "minutes_before": 10,
                     "include_congestion": True,
                 },
@@ -33,7 +36,7 @@ async def notification_factory(db_session: AsyncSession) -> NotificationFactory:
                     "highlight_today_pick": True,
                 },
                 NotificationType.LIBRARY: {
-                    "reading_room_id": "R-101",
+                    "reading_room_id": 1,
                     "threshold": 5,
                 },
             }[type_]
