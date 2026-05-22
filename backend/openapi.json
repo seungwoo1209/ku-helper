@@ -71,6 +71,89 @@
         }
       }
     },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Access 토큰 갱신 (F-05)",
+        "description": "유효한 refresh JWT 를 받아 새 access·refresh 쌍을 발급한다. 기존 refresh jti 는 Redis whitelist 에서 즉시 제거되므로(rotation) 한 번 사용된 refresh 토큰은 두 번째 호출에서 401 을 받는다.\n\n본 엔드포인트는 인증 헤더가 아니라 본문의 `refresh_token` 으로만 인증한다. Access 토큰이 만료된 상태에서도 호출 가능하도록 의도된 설계.",
+        "operationId": "refresh_api_v1_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "새 access·refresh JWT 쌍",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "refresh JWT 가 위조·만료됐거나 jti 가 whitelist 에 없음 (INVALID_AUTH_TOKEN)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "로그아웃 (F-02)",
+        "description": "refresh JWT 의 jti 를 Redis whitelist 에서 제거한다. 이후 같은 refresh 로 /auth/refresh 호출 시 401. 같은 토큰으로 두 번 호출해도 204 (DEL 은 idempotent).\n\nAccess 토큰은 별도 블랙리스트가 없으므로 만료(30분) 시까지 유효하게 남는다. 즉시 차단이 필요하면 클라이언트에서 access 토큰을 폐기한다.",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "본문 없음"
+          },
+          "401": {
+            "description": "refresh JWT 가 위조·만료된 경우 (INVALID_AUTH_TOKEN)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/me": {
       "get": {
         "tags": [
@@ -889,6 +972,39 @@
         ]
       }
     },
+    "/api/v1/admin/health": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "관리자 헬스 체크",
+        "description": "`require_role(UserRole.ADMIN)` 가드 동작 확인용 엔드포인트. 관리자 권한이 있는 사용자에게는 `{\"status\": \"ok\"}` 를 반환하고, 일반 사용자는 403 `NOT_AUTHORIZED_FOR_ROLE` 로 차단된다. 향후 F-23 관리자 대시보드 엔드포인트들의 권한 가드가 모두 이 패턴을 따른다. 인증 필요: `Authorization: Bearer <access>` 헤더. 토큰 누락·만료·서명오류 또는 탈퇴(`USER_DELETED`) 사용자는 401.",
+        "operationId": "get_admin_health_api_v1_admin_health_get",
+        "responses": {
+          "200": {
+            "description": "권한 검증 통과 시 상태 ping",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminHealthRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "JWT 누락·만료·서명오류 또는 USER_DELETED"
+          },
+          "403": {
+            "description": "ADMIN 권한이 없는 사용자 — `code=NOT_AUTHORIZED_FOR_ROLE`"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/health": {
       "get": {
         "summary": "Health",
@@ -914,6 +1030,30 @@
   },
   "components": {
     "schemas": {
+      "AdminHealthRead": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "description": "가드 통과 시 항상 'ok'. 본 엔드포인트는 권한 검증 진입점만 검증한다.",
+            "examples": [
+              "ok"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "AdminHealthRead",
+        "description": "`GET /admin/health` 응답. require_role(ADMIN) 가드가 통과했음을 알리는 ping.",
+        "examples": [
+          {
+            "status": "ok"
+          }
+        ]
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1084,6 +1224,29 @@
           }
         ]
       },
+      "LogoutRequest": {
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token",
+            "description": "로그아웃 대상 refresh JWT.",
+            "examples": [
+              "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "title": "LogoutRequest",
+        "description": "`POST /auth/logout` 요청 본문.\n\nrefresh jti 를 Redis whitelist 에서 제거해 추가 refresh 시도를 차단한다. 같은 토큰으로\n두 번 호출해도 204 (DEL 은 idempotent). access 토큰은 별도 블랙리스트가 없으므로 만료\n시까지 유효한 채 남는다(access 만료 30분).",
+        "examples": [
+          {
+            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        ]
+      },
       "LunchConfig": {
         "properties": {
           "notify_at": {
@@ -1207,6 +1370,72 @@
               "notify_at": "11:30:00",
               "recommend_count": 5
             }
+          }
+        ]
+      },
+      "TokenRead": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token",
+            "description": "자체 발급 access JWT. 만료 30분. 보호 엔드포인트에 Bearer 로 전달.",
+            "examples": [
+              "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            ]
+          },
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token",
+            "description": "자체 발급 refresh JWT. 만료 30일. `POST /auth/refresh` 로 새 access·refresh 교환에만 사용. jti 가 Redis whitelist 에 등록돼 있어야 통과한다.",
+            "examples": [
+              "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            ]
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "description": "OAuth2 표준 토큰 타입. 항상 `bearer`.",
+            "default": "bearer",
+            "examples": [
+              "bearer"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token"
+        ],
+        "title": "TokenRead",
+        "description": "Discord OAuth 콜백 성공 시 발급되는 자체 JWT 쌍.\n\n`access_token` 은 보호 엔드포인트의 `Authorization: Bearer ...` 헤더로 사용한다.\n`refresh_token` 은 access 갱신 전용 (F-05, 후속 PR). 두 토큰 모두 HS256 서명,\npayload = (sub=user_id, discord_id, exp, iat, jti).",
+        "examples": [
+          {
+            "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            "token_type": "bearer"
+          }
+        ]
+      },
+      "TokenRefreshRequest": {
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token",
+            "description": "이전 로그인/refresh 응답으로 받은 refresh JWT.",
+            "examples": [
+              "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "title": "TokenRefreshRequest",
+        "description": "`POST /auth/refresh` 요청 본문.\n\n클라이언트는 보관 중인 refresh JWT 를 body 로 보낸다. 서버는 jti whitelist 를 확인한 뒤\nrotation(old jti DEL + new jti SET) 후 새 access·refresh 쌍을 반환한다. 같은 refresh 를\n두 번 사용하면 두 번째 호출은 401(INVALID_AUTH_TOKEN).",
+        "examples": [
+          {
+            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
           }
         ]
       },

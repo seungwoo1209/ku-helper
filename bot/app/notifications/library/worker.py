@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 
 import structlog
 
+from app.admin.alerts import CrawlerSource, enqueue_admin_alerts
 from app.core.exceptions import BotException
 from app.crawlers.library.client import LibraryClient
 from app.crawlers.library.exceptions import LibraryCrawlerFailed
@@ -135,8 +136,9 @@ async def run_library_job(ctx: JobContext) -> None:
                     room_id=room_id,
                 )
     except (LibraryCrawlerFailed, BotException) as exc:
-        # crawler/도메인 예외는 swallow + 로그. 다음 틱 재시도(F-22 카운터는 후속).
+        # crawler/도메인 예외는 swallow + 로그. 다음 틱 재시도.
         _logger.warning("library_poll_failed", code=exc.code)
+        await enqueue_admin_alerts(ctx.queue, ctx.settings, CrawlerSource.LIBRARY, exc)
 
 
 async def run_immediate_send_library_job(ctx: JobContext) -> None:
@@ -172,6 +174,12 @@ async def run_immediate_send_library_job(ctx: JobContext) -> None:
             except (LibraryCrawlerFailed, BotException) as exc:
                 await _insert_immediate_failure(ctx, row.id, row.user_id, exc.code)
                 ctx.immediate_send_inflight.discard(row.id)
+                await enqueue_admin_alerts(
+                    ctx.queue,
+                    ctx.settings,
+                    CrawlerSource.LIBRARY,
+                    exc,
+                )
                 continue
 
             room = snapshot.get(room_id) if room_id is not None else None
@@ -199,6 +207,7 @@ async def run_immediate_send_library_job(ctx: JobContext) -> None:
             )
     except BotException as exc:
         _logger.exception("immediate_send_library_failed", code=exc.code)
+        await enqueue_admin_alerts(ctx.queue, ctx.settings, CrawlerSource.LIBRARY, exc)
 
 
 async def _insert_immediate_failure(

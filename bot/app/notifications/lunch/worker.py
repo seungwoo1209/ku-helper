@@ -3,6 +3,7 @@ import random
 
 import structlog
 
+from app.admin.alerts import CrawlerSource, enqueue_admin_alerts
 from app.core.database import async_session_maker
 from app.core.exceptions import BotException
 from app.crawlers.lunch.exceptions import LunchCrawlerFailed
@@ -93,6 +94,13 @@ async def run_immediate_send_lunch_job(ctx: JobContext) -> None:
                     await session.commit()
                 # in-flight 에서 즉시 빼서 같은 row 가 다음 틱에 재시도되지 않도록.
                 ctx.immediate_send_inflight.discard(row.id)
+                # F-22: 크롤러 종류별로 관리자 카운터 INCR.
+                source = (
+                    CrawlerSource.LUNCH
+                    if isinstance(exc, LunchCrawlerFailed)
+                    else CrawlerSource.RESTAURANTS
+                )
+                await enqueue_admin_alerts(ctx.queue, ctx.settings, source, exc)
                 continue
 
             sampled = (
@@ -140,3 +148,4 @@ async def run_immediate_send_lunch_job(ctx: JobContext) -> None:
             )
     except BotException as exc:
         _logger.exception("immediate_send_lunch_failed", code=exc.code)
+        await enqueue_admin_alerts(ctx.queue, ctx.settings, CrawlerSource.LUNCH, exc)
