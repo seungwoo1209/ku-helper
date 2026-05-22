@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Modal, Field, Btn } from '../components/ui';
 import { createNotification, updateNotification, deleteNotification } from '../api/notifications';
-
-const fmtTime = (t) => (t ? t.slice(0, 5) : '');
+import { fmtTime } from '../utils/time';
 
 /* ── Transit 폼 ─────────────────────────────────── */
 function TransitForm({ config, onChange }) {

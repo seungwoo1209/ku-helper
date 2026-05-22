@@ -1,7 +1,6 @@
 import { SectionHead, Toggle } from '../components/ui';
 import { updateNotification } from '../api/notifications';
-
-const fmtTime = (t) => (t ? t.slice(0, 5) : '');
+import { fmtTime } from '../utils/time';
 
 function transitRows(rules) {
   const active = rules.filter(r => r.on).slice(0, 2);
@@ -64,10 +63,19 @@ const DashboardScreen = ({ state, setState, openRule }) => {
         [rulesKey]: s[category][rulesKey].map(r => ({ ...r, on: enabled })),
       },
     }));
-    // 백엔드 동기화 (실패해도 UI는 유지 — 재시도 없음)
-    await Promise.allSettled(
+    // 백엔드 동기화 — 하나라도 실패하면 낙관적 업데이트 롤백
+    const results = await Promise.allSettled(
       rules.map(r => updateNotification(category, r.id, { enabled }))
     );
+    if (results.some(r => r.status === 'rejected')) {
+      setState(s => ({
+        ...s,
+        [category]: {
+          ...s[category],
+          [rulesKey]: rules,
+        },
+      }));
+    }
   }
 
   return (

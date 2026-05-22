@@ -29,7 +29,7 @@ const LoginScreen = ({ onDevLogin }) => (
             Discord로 계속하기
           </button>
           <div className="legal">로그인 시 캠퍼스 알리미 디스코드 서버에 자동 가입됩니다.</div>
-          {onDevLogin && (
+          {onDevLogin && !import.meta.env.PROD && (
             <button onClick={onDevLogin}
               style={{ marginTop: 10, width: '100%', padding: '8px 0', background: 'none',
                 border: '1px dashed var(--rule)', borderRadius: 8, cursor: 'pointer',

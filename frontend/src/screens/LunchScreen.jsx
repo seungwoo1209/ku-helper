@@ -1,8 +1,7 @@
 import { SectionHead, EmbedPreview } from '../components/ui';
 import RuleRow from '../components/RuleRow';
 import { updateNotification } from '../api/notifications';
-
-const fmtTime = (t) => (t ? t.slice(0, 5) : '');
+import { fmtTime } from '../utils/time';
 
 const PREVIEW_FIELDS = [
   { k: '오늘의 추천', v: '소담 · 광진구 능동로' },

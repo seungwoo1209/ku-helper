@@ -1,3 +1,5 @@
+import { fmtTime } from '../utils/time';
+
 const TOKEN_KEY = 'ku_access_token';
 const BASE = '/api/v1/me/notifications';
 
@@ -39,12 +41,6 @@ export async function deleteNotification(id) {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-}
-
-/* "HH:MM:SS" 또는 "HH:MM" → "HH:MM" */
-function fmtTime(t) {
-  if (!t) return '';
-  return t.slice(0, 5);
 }
 
 /* API 응답 → 화면 표시용 형태 변환 */
