@@ -1,4 +1,4 @@
-const LoginScreen = ({ onLogin }) => (
+const LoginScreen = ({ onDevLogin }) => (
   <div className="login">
     <div className="frame">
       <div className="left">
@@ -29,6 +29,14 @@ const LoginScreen = ({ onLogin }) => (
             Discord로 계속하기
           </button>
           <div className="legal">로그인 시 캠퍼스 알리미 디스코드 서버에 자동 가입됩니다.</div>
+          {onDevLogin && (
+            <button onClick={onDevLogin}
+              style={{ marginTop: 10, width: '100%', padding: '8px 0', background: 'none',
+                border: '1px dashed var(--rule)', borderRadius: 8, cursor: 'pointer',
+                color: 'var(--ink-50)', fontSize: 12 }}>
+              [개발] OAuth 없이 임시 로그인
+            </button>
+          )}
         </div>
         <div>
           <div className="hint" style={{ marginBottom: 8 }}>요청 권한</div>
