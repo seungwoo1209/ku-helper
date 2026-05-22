@@ -1,5 +1,15 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "branch=$(git branch --show-current 2>/dev/null || echo 'unknown') && commits=$(git log --oneline -10 2>/dev/null || echo 'no commits') && jq -n --arg branch \"$branch\" --arg commits \"$commits\" '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"## Git Context\\n현재 브랜치: \\($branch)\\n\\n### 최근 커밋 (최대 10개)\\n\\($commits)\"}}'"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
