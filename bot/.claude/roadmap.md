@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-21 — 크롤러 4종 Redis TTL 캐시 이전 완료(브랜치 `feat/caching`). 모듈 dict 캐시 + asyncio.Lock 폐기. `JobContext.redis_client` 가 Optional → required 로 승격(`main.py` 가 redis ping 실패 시 부팅 차단). 신규 키: `subway:arrivals:{station_name}` TTL 30s, `lunch:menu:{iso_week}` TTL 7d, `restaurants:pool:{YYYY-MM-DD}` TTL 24h, `library:rooms:{sha1(url)[:12]}` TTL 15s. 4개 크롤러 모두 `__init__(http_client, settings, redis)` 시그니처로 통일 + dataclass↔JSON 직렬화 헬퍼 `_deserialize_*` 모듈 내부 전용. SETEX race 는 같은 값 덮어쓰기라 무해 → 분산락 미도입(KISS). 이전: F-06 TRANSIT 단발 도착 알림 종단 완료(백엔드 커밋 `dcb5ab2`). TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
+마지막 갱신: 2026-05-22 — §E F-22 single-trigger admin DM 완료(브랜치 `feat/roles`, PR #13 + 후속 가드 제거 커밋). 원본 요구사항 직역(임계값·카운터·쿨다운 없음). 노이즈 가드 재도입은 실 운영 측정 후 §E-2 항목으로 대기. 이전: 크롤러 4종 Redis TTL 캐시 이전 완료(브랜치 `feat/caching`). 모듈 dict 캐시 + asyncio.Lock 폐기. `JobContext.redis_client` 가 Optional → required 로 승격(`main.py` 가 redis ping 실패 시 부팅 차단). 신규 키: `subway:arrivals:{station_name}` TTL 30s, `lunch:menu:{iso_week}` TTL 7d, `restaurants:pool:{YYYY-MM-DD}` TTL 24h, `library:rooms:{sha1(url)[:12]}` TTL 15s. 4개 크롤러 모두 `__init__(http_client, settings, redis)` 시그니처로 통일 + dataclass↔JSON 직렬화 헬퍼 `_deserialize_*` 모듈 내부 전용. SETEX race 는 같은 값 덮어쓰기라 무해 → 분산락 미도입(KISS). 이전: F-06 TRANSIT 단발 도착 알림 종단 완료(백엔드 커밋 `dcb5ab2`). TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
 
 ## 진행 상황 스냅샷
 
@@ -155,15 +155,23 @@
 ### D-4. LIBRARY 즉시 발송 — 완료 (커밋 `4f89342`)
 - `run_immediate_send_library_job` + `build_library_immediate_embed`(현재 좌석만). `immediate_send_library_poll` 5초 잡. 백엔드 `POST /me/immediate-send/library` 와 짝. crawler 실패·방 부재 시 워커 직접 FAILED INSERT.
 
-## §E. F-22 관리자 알림
+## §E. F-22 관리자 알림 — 완료 (single-trigger)
 
-### E-1. 크롤러 실패 카운터
-- Crawler 예외 발생 시 Redis `INCR crawler_fail:{source}` + `EXPIRE 300`(5분).
-- 잡 함수의 except 블록에서 호출.
+### E-1. Single-trigger admin DM — 완료
+- 공개 함수: `app/admin/alerts.py:enqueue_admin_alerts(queue, settings, source, exc)`.
+- 크롤러 예외 1회 = admin DM 1건 큐 적재. `settings.admin_discord_ids` 전원.
+- admin task 식별자: `notification_id is None AND immediate_send_request_id is None`. Sender 가 user_status 이중 가드 skip + `notification_history` 두 FK NULL + payload 기록.
+- `CrawlerSource` enum: SUBWAY/LUNCH/RESTAURANTS/LIBRARY.
+- 호출 부 총 8 곳: transit 3 (정기 outer + 즉시 per-row + 즉시 outer), lunch 2 (즉시 per-row + 즉시 outer), library 3 (정기 outer + 즉시 per-row + 즉시 outer).
+- 원본 요구사항(`docs/requirements/features.md` F-22: "실패 시 1분 이내 DM") 직역 — 임계값·카운터·쿨다운 없음.
 
-### E-2. 3회 연속 누적 시 관리자 DM
-- 카운터 값 ≥ 3이면 `AdminAlertTask`를 Sender 큐에 적재.
-- 동일 장애 중복 방지: `crawler_alert_cooldown:{source}` TTL 30분. 이 키가 있으면 알림 skip.
+### E-2. 노이즈 가드 재도입 — 대기 (트리거: 실 운영 노이즈 측정 후)
+- 현재 single-trigger 정책상 subway/library 5초 폴링 시 API 장애 1분 지속 = admin 폰 12 발 예상. 실 운영에서 노이즈 폭주가 확인되면 아래 가드를 한꺼번에 도입.
+- **임계값** (3회 연속 실패만 알림): Redis `INCR crawler_fail:{source}` + 첫 INCR 시 `EXPIRE 300`(5분 윈도우). 카운터 ≥ 3 이면 통과.
+- **쿨다운** (동일 source 30분 중복 차단): Redis `SET crawler_alert_cooldown:{source} 1 NX EX 1800`. NX 실패 = skip.
+- **함수 시그니처 변경**: `enqueue_admin_alerts` 에 `redis` 인자 재도입 → `maybe_enqueue_admin_alerts` 로 rename. 8 곳 call site 시그니처 동기.
+- **테스트 재도입**: 임계 미달/도달/쿨다운/TTL 만료 시나리오 약 8건.
+- **참고 git 히스토리**: PR #13 + 후속 가드 제거 커밋 — 이전 구현이 그대로 남아있어 부활 비용 낮음.
 
 ## §F. F-18 활성 시간대 (백엔드 결정 후)
 
@@ -195,7 +203,7 @@
 
 **§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (완료) → TRANSIT 즉시 발송 (완료) → §D (완료, LIBRARY 정기+즉시발송) → §B-2a (F-06 arrival, 완료) → §C-4 → §E → §F → §G**
 
-남은 우선 작업: §E(F-22 관리자 알림), §B-4(F-08 혼잡도 — arvlCd 라벨은 부분 완료), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(docker-compose.test.yml·CI·health check).
+남은 우선 작업: §B-4(F-08 혼잡도 — arvlCd 라벨은 부분 완료), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(docker-compose.test.yml·CI·health check). §E-2(F-22 노이즈 가드 재도입) 는 실 운영 측정 후 트리거.
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 
