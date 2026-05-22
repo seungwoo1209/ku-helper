@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import fakeredis.aioredis
 import pytest
 
+from app.admin.alerts import CrawlerSource
 from app.crawlers.library.client import RoomSeats
 from app.crawlers.library.exceptions import LibraryCrawlerFailed
 from app.db.models import NotificationType
@@ -240,6 +241,34 @@ async def test_crawler_failure_is_swallowed(
     assert ctx.queue.qsize() == 0
 
 
+@pytest.mark.asyncio
+async def test_crawler_failure_calls_admin_alert(
+    monkeypatch: pytest.MonkeyPatch, redis: fakeredis.aioredis.FakeRedis
+) -> None:
+    """크롤러 실패 시 enqueue_admin_alerts 가 LIBRARY source 로 1회 호출."""
+    pair = _notification({"reading_room_id": 1, "threshold": 20})
+    _patch_repo(monkeypatch, [pair])
+    _patch_client(monkeypatch, {}, raises=LibraryCrawlerFailed("boom"))
+    ctx = _ctx(redis)
+
+    enqueue_calls: list[tuple[object, ...]] = []
+
+    async def _fake_enqueue(
+        queue: object,
+        settings: object,
+        source: CrawlerSource,
+        exc: BaseException,
+    ) -> None:
+        enqueue_calls.append((source, exc))
+
+    monkeypatch.setattr(worker_module, "enqueue_admin_alerts", _fake_enqueue)
+
+    await run_library_job(ctx)
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0][0] == CrawlerSource.LIBRARY
+
+
 # ---------------------------------------------------------------------------
 # 즉시 발송 (run_immediate_send_library_job)
 # ---------------------------------------------------------------------------
@@ -343,3 +372,35 @@ async def test_immediate_inflight_skips_duplicate(
     await run_immediate_send_library_job(ctx)
 
     assert ctx.queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_immediate_send_library_calls_admin_alert_on_crawler_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """즉시 발송 경로에서 LibraryCrawlerFailed 발생 시 enqueue_admin_alerts 가
+    CrawlerSource.LIBRARY 로 1회 호출되어야 한다 (per-row catch 회귀 가드)."""
+    _patch_immediate_repo(monkeypatch, [_pending_row({"reading_room_id": 1})])
+    _patch_client(monkeypatch, {}, raises=LibraryCrawlerFailed("boom"))
+    _patch_history(monkeypatch)
+    ctx = _ctx(None)
+
+    enqueue_calls: list[tuple[object, ...]] = []
+
+    async def _fake_enqueue(
+        queue: object,
+        settings: object,
+        source: CrawlerSource,
+        exc: BaseException,
+    ) -> None:
+        enqueue_calls.append((source, exc))
+
+    monkeypatch.setattr(worker_module, "enqueue_admin_alerts", _fake_enqueue)
+
+    await run_immediate_send_library_job(ctx)
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0][0] == CrawlerSource.LIBRARY
+    # FAILED INSERT 도 실행되어야 한다.
+    assert ctx.queue.qsize() == 0
+    assert ctx.immediate_send_inflight == set()

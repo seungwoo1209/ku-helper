@@ -461,3 +461,91 @@ async def test_backoff_sleep_arguments(
         await _run_worker_with_task(task, discord_client, UserStatus.ACTIVE)
 
     assert sleep_calls == [1.0, 2.0]
+
+
+# ---------------------------------------------------------------------------
+# F-22 회귀 가드: admin task 이중 가드 skip
+# ---------------------------------------------------------------------------
+
+
+def _make_admin_task(discord_id: int = 777777) -> SendDmTask:
+    """admin task: notification_id=None, immediate_send_request_id=None."""
+    return SendDmTask(
+        notification_id=None,
+        user_id=discord_id,
+        discord_id=discord_id,
+        embed=discord.Embed(title="관리자 알림"),
+        payload={
+            "source": "subway",
+            "code": "SubwayApiUnavailable",
+            "count": 3,
+            "error_excerpt": "test",
+        },
+        immediate_send_request_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_task_skips_user_status_guard(
+    discord_client: Any,
+    dc_channel: AsyncMock,
+) -> None:
+    """admin task(둘 다 None) 시 user_status 이중 가드를 skip 하고 DM 이 발송돼야 한다.
+
+    users 테이블에 없는(None 반환) admin discord_id 에 대해 가드 없이 발송 성공 검증.
+    """
+    task = _make_admin_task()
+    # user_status=None → 일반 task 라면 FAILED. admin task 라면 skip.
+    history_repo, _ = await _run_worker_with_task(
+        task, discord_client, user_status=None
+    )
+
+    # DM 발송 성공
+    dc_channel.send.assert_awaited_once()
+    # SUCCESS history 1 row
+    assert len(history_repo.calls) == 1
+    assert history_repo.calls[0].status == NotificationDeliveryStatus.SUCCESS
+    assert history_repo.calls[0].notification_id is None
+    assert history_repo.calls[0].immediate_send_request_id is None
+
+
+@pytest.mark.asyncio
+async def test_admin_task_success_inserts_with_null_fks(
+    discord_client: Any,
+    dc_channel: AsyncMock,
+) -> None:
+    """admin task 발송 성공 시 두 FK 가 모두 NULL 인 SUCCESS row 가 INSERT 돼야 한다."""
+    task = _make_admin_task()
+    history_repo, _ = await _run_worker_with_task(
+        task, discord_client, UserStatus.ACTIVE
+    )
+
+    assert len(history_repo.calls) == 1
+    call = history_repo.calls[0]
+    assert call.status == NotificationDeliveryStatus.SUCCESS
+    assert call.notification_id is None
+    assert call.immediate_send_request_id is None
+    assert call.payload == task.payload
+
+
+@pytest.mark.asyncio
+async def test_admin_task_failure_inserts_with_null_fks(
+    discord_client: Any,
+    dc_channel: AsyncMock,
+) -> None:
+    """admin task 발송 실패 시 두 FK 가 모두 NULL 인 FAILED row 가 INSERT 돼야 한다."""
+    dc_channel.send.side_effect = discord.HTTPException(
+        MagicMock(status=500), "discord error"
+    )
+    task = _make_admin_task()
+
+    with patch("app.notifications.sender.asyncio.sleep", new_callable=AsyncMock):
+        history_repo, _ = await _run_worker_with_task(
+            task, discord_client, user_status=None
+        )
+
+    assert len(history_repo.calls) == 1
+    call = history_repo.calls[0]
+    assert call.status == NotificationDeliveryStatus.FAILED
+    assert call.notification_id is None
+    assert call.immediate_send_request_id is None

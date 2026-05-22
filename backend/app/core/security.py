@@ -1,4 +1,4 @@
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, Any, cast
@@ -13,7 +13,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import AppException
 
 if TYPE_CHECKING:
-    from app.domains.users.models import User
+    from app.domains.users.models import User, UserRole
 
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -49,6 +49,12 @@ class CurrentUserNotFound(AppException):
     code = "CURRENT_USER_NOT_FOUND"
     detail = "토큰에 해당하는 사용자가 없습니다."
     status_code = 401
+
+
+class NotAuthorizedForRole(AppException):
+    code = "NOT_AUTHORIZED_FOR_ROLE"
+    detail = "필요한 권한이 없습니다."
+    status_code = 403
 
 
 def _now() -> datetime:
@@ -197,3 +203,20 @@ async def get_current_user(
     if user.status == UserStatus.DELETED:
         raise UserDeleted()
     return user
+
+
+def require_role(role: "UserRole") -> Callable[..., Awaitable["User"]]:
+    """role 가드 의존성을 만든다.
+
+    라우터에서 `admin: Annotated[User, Depends(require_role(UserRole.ADMIN))]` 형태로 합성.
+    get_current_user 통과 후 user.role 비교 — DELETED 사용자는 401 이 먼저 거절한다.
+    """
+
+    async def _guard(
+        current_user: Annotated["User", Depends(get_current_user)],
+    ) -> "User":
+        if current_user.role != role:
+            raise NotAuthorizedForRole()
+        return current_user
+
+    return _guard

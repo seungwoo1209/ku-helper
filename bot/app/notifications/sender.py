@@ -106,24 +106,31 @@ async def _process_task(
         history_repo = NotificationHistoryRepository(session)
         notification_repo = NotificationRepository(session)
 
-        # 이중 가드: 큐에서 꺼낸 시점에 사용자 상태 재검증.
-        user_status = await notification_repo.get_user_status(task.user_id)
-        if user_status != UserStatus.ACTIVE:
-            _logger.info(
-                "sender_skip_inactive_user",
-                user_id=task.user_id,
-                status=str(user_status),
-            )
-            await history_repo.insert_result(
-                notification_id=task.notification_id,
-                immediate_send_request_id=task.immediate_send_request_id,
-                user_id=task.user_id,
-                status=NotificationDeliveryStatus.FAILED,
-                payload=task.payload,
-                failure_reason="user_deleted",
-            )
-            await session.commit()
-            return
+        # admin task 식별자: notification_id 와 immediate_send_request_id 둘 다 None.
+        # 관리자는 users 테이블 미가입 화이트리스트일 수 있으므로 이중 가드를 skip.
+        _is_admin_task = (
+            task.notification_id is None and task.immediate_send_request_id is None
+        )
+
+        if not _is_admin_task:
+            # 이중 가드: 큐에서 꺼낸 시점에 사용자 상태 재검증.
+            user_status = await notification_repo.get_user_status(task.user_id)
+            if user_status != UserStatus.ACTIVE:
+                _logger.info(
+                    "sender_skip_inactive_user",
+                    user_id=task.user_id,
+                    status=str(user_status),
+                )
+                await history_repo.insert_result(
+                    notification_id=task.notification_id,
+                    immediate_send_request_id=task.immediate_send_request_id,
+                    user_id=task.user_id,
+                    status=NotificationDeliveryStatus.FAILED,
+                    payload=task.payload,
+                    failure_reason="user_deleted",
+                )
+                await session.commit()
+                return
 
         last_exc: discord.DiscordException | None = None
         succeeded = False
@@ -172,7 +179,7 @@ async def _process_task(
             )
             await session.commit()
             _logger.info(
-                "dm_sent",
+                "admin_alert_sent" if _is_admin_task else "dm_sent",
                 user_id=task.user_id,
                 discord_id=task.discord_id,
                 notification_id=task.notification_id,
@@ -182,7 +189,7 @@ async def _process_task(
             # 모든 시도 실패 — last_exc 가 반드시 존재 (succeeded=False 이면 최소 1회 except).
             failure_reason = str(last_exc)[:200] if last_exc is not None else "unknown"
             _logger.warning(
-                "dm_failed",
+                "admin_alert_failed" if _is_admin_task else "dm_failed",
                 user_id=task.user_id,
                 discord_id=task.discord_id,
                 notification_id=task.notification_id,
