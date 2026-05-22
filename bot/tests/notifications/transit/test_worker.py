@@ -483,7 +483,7 @@ async def test_api_unavailable_swallowed_queue_empty(
 
 
 # ---------------------------------------------------------------------------
-# F-22 회귀 가드: SubwayApiUnavailable → maybe_enqueue_admin_alerts 1회 호출
+# F-22 회귀 가드: SubwayApiUnavailable → enqueue_admin_alerts 1회 호출
 # ---------------------------------------------------------------------------
 
 
@@ -527,7 +527,6 @@ async def test_api_unavailable_calls_admin_alert_once(
 
     async def _fake_enqueue(
         queue: object,
-        redis: object,
         settings: object,
         source: CrawlerSource,
         exc: BaseException,
@@ -551,7 +550,7 @@ async def test_api_unavailable_calls_admin_alert_once(
             lambda http_client, settings, redis: _RaisingSubwayClient(),
         )
         m.setattr(
-            "app.notifications.transit.worker.maybe_enqueue_admin_alerts",
+            "app.notifications.transit.worker.enqueue_admin_alerts",
             _fake_enqueue,
         )
 

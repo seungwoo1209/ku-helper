@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
-from app.admin.alerts import CrawlerSource, maybe_enqueue_admin_alerts
+from app.admin.alerts import CrawlerSource, enqueue_admin_alerts
 from app.core.exceptions import BotException
 from app.crawlers.subway.client import SubwayArrival, SubwayClient
 from app.crawlers.subway.exceptions import SubwayApiUnavailable
@@ -62,7 +62,7 @@ async def run_transit_job(ctx: JobContext) -> None:
     - mode == "recurring": F-07 정기 간격 발송.
     - mode == "arrival": F-06 단발 도착 알림 (Redis 필수).
     - 같은 역(station) 구독이 여러 개이면 fetch_arrivals 는 한 번만 호출(틱 내 dict 캐시).
-    - SubwayApiUnavailable → maybe_enqueue_admin_alerts + swallow. 잡 외곽에서 1회 카운트.
+    - SubwayApiUnavailable → enqueue_admin_alerts + swallow. 잡 외곽에서 1회 호출.
     """
     now = datetime.now(tz=timezone.utc)
     # 윈도우 비교는 KST 기준. UTC now 는 interval 계산에도 그대로 사용.
@@ -193,9 +193,7 @@ async def run_transit_job(ctx: JobContext) -> None:
                 )
     except SubwayApiUnavailable as exc:
         _logger.warning("transit_subway_api_unavailable", code=exc.code)
-        await maybe_enqueue_admin_alerts(
-            ctx.queue, ctx.redis_client, ctx.settings, CrawlerSource.SUBWAY, exc
-        )
+        await enqueue_admin_alerts(ctx.queue, ctx.settings, CrawlerSource.SUBWAY, exc)
     except BotException as exc:
         _logger.warning("transit_bot_exception", code=exc.code)
 
@@ -386,9 +384,8 @@ async def run_immediate_send_transit_job(ctx: JobContext) -> None:
                     )
                     await session.commit()
                     ctx.immediate_send_inflight.discard(row.id)
-                    await maybe_enqueue_admin_alerts(
+                    await enqueue_admin_alerts(
                         ctx.queue,
-                        ctx.redis_client,
                         ctx.settings,
                         CrawlerSource.SUBWAY,
                         exc,
@@ -420,6 +417,4 @@ async def run_immediate_send_transit_job(ctx: JobContext) -> None:
                 )
     except BotException as exc:
         _logger.exception("immediate_send_transit_failed", code=exc.code)
-        await maybe_enqueue_admin_alerts(
-            ctx.queue, ctx.redis_client, ctx.settings, CrawlerSource.SUBWAY, exc
-        )
+        await enqueue_admin_alerts(ctx.queue, ctx.settings, CrawlerSource.SUBWAY, exc)

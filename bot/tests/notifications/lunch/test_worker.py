@@ -208,7 +208,7 @@ async def test_run_immediate_send_lunch_job_writes_failed_history_on_crawler_err
 async def test_run_immediate_send_lunch_job_calls_admin_alert_on_lunch_crawler_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """LunchCrawlerFailed 발생 시 maybe_enqueue_admin_alerts 가 LUNCH source 로 호출."""
+    """LunchCrawlerFailed 발생 시 enqueue_admin_alerts 가 LUNCH source 로 호출."""
     rows = [
         ImmediateSendRequestRow(id=40, user_id=4, discord_id=102, payload={}),
     ]
@@ -242,7 +242,6 @@ async def test_run_immediate_send_lunch_job_calls_admin_alert_on_lunch_crawler_e
 
     async def _fake_enqueue(
         queue: object,
-        redis: object,
         settings: object,
         source: CrawlerSource,
         exc: BaseException,
@@ -251,7 +250,7 @@ async def test_run_immediate_send_lunch_job_calls_admin_alert_on_lunch_crawler_e
 
     monkeypatch.setattr(
         lunch_worker_module,
-        "maybe_enqueue_admin_alerts",
+        "enqueue_admin_alerts",
         _fake_enqueue,
     )
 

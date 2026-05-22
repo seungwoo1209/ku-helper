@@ -3,7 +3,7 @@ import random
 
 import structlog
 
-from app.admin.alerts import CrawlerSource, maybe_enqueue_admin_alerts
+from app.admin.alerts import CrawlerSource, enqueue_admin_alerts
 from app.core.database import async_session_maker
 from app.core.exceptions import BotException
 from app.crawlers.lunch.exceptions import LunchCrawlerFailed
@@ -100,9 +100,7 @@ async def run_immediate_send_lunch_job(ctx: JobContext) -> None:
                     if isinstance(exc, LunchCrawlerFailed)
                     else CrawlerSource.RESTAURANTS
                 )
-                await maybe_enqueue_admin_alerts(
-                    ctx.queue, ctx.redis_client, ctx.settings, source, exc
-                )
+                await enqueue_admin_alerts(ctx.queue, ctx.settings, source, exc)
                 continue
 
             sampled = (
@@ -150,6 +148,4 @@ async def run_immediate_send_lunch_job(ctx: JobContext) -> None:
             )
     except BotException as exc:
         _logger.exception("immediate_send_lunch_failed", code=exc.code)
-        await maybe_enqueue_admin_alerts(
-            ctx.queue, ctx.redis_client, ctx.settings, CrawlerSource.LUNCH, exc
-        )
+        await enqueue_admin_alerts(ctx.queue, ctx.settings, CrawlerSource.LUNCH, exc)
