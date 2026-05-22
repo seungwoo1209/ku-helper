@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://ku-helper-production.up.railway.app',
+        target: process.env.VITE_API_TARGET ?? 'https://ku-helper-production.up.railway.app',
         changeOrigin: true,
       },
     },
