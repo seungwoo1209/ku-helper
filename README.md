@@ -114,11 +114,6 @@ npm install
 npm run dev
 ```
 
-### 전체 (Docker Compose)
-
-```bash
-docker compose up --build
-```
 
 ---
 
