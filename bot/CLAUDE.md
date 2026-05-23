@@ -70,4 +70,4 @@ tests/                       # app/ 구조 미러링
 
 봇 컨테이너는 아직 코드 0줄이다. 다음 PR을 시작할 때는 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-@.claude/roadmap.md
+@ROADMAP.md

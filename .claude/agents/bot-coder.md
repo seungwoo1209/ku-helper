@@ -19,7 +19,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 - `bot/.claude/security.md`
 - `bot/.claude/testing.md`
 
-변경 대상 계층이 명확하면 해당 모듈의 기존 파일도 Read합니다. `bot/.claude/roadmap.md`는
+변경 대상 계층이 명확하면 해당 모듈의 기존 파일도 Read합니다. `bot/ROADMAP.md`는
 메인 세션이 명시적으로 참조하라고 지시한 경우에만 읽습니다.
 
 ## 절대 규칙 (bot/CLAUDE.md §Rules 요약)
