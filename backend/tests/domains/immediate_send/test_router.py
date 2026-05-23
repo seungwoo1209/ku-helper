@@ -3,8 +3,8 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user
 from app.domains.immediate_send.models import ImmediateSendRequest
+from app.domains.users.dependencies import get_current_user
 from app.domains.notifications.models import NotificationType
 from app.domains.users.models import User, UserStatus
 from app.main import app
@@ -52,9 +52,7 @@ async def test_dispatch_lunch_now_blocks_deleted_user(
     user_factory,
     db_session: AsyncSession,
 ) -> None:
-    deleted = await user_factory(discord_username="ghost", status=UserStatus.DELETED)
-    # authed_client 픽스처는 ACTIVE 만 다루므로 수동 override.
-    db_session.expunge(deleted)
+    await user_factory(discord_username="ghost", status=UserStatus.DELETED)
 
     async def _override_get_current_user() -> User:
         from app.domains.users.exceptions import UserDeleted
@@ -102,8 +100,7 @@ async def test_dispatch_transit_now_blocks_deleted_user(
     user_factory,
     db_session: AsyncSession,
 ) -> None:
-    deleted = await user_factory(discord_username="ghost2", status=UserStatus.DELETED)
-    db_session.expunge(deleted)
+    await user_factory(discord_username="ghost2", status=UserStatus.DELETED)
 
     async def _override_get_current_user() -> User:
         from app.domains.users.exceptions import UserDeleted
@@ -163,8 +160,7 @@ async def test_dispatch_library_now_blocks_deleted_user(
     user_factory,
     db_session: AsyncSession,
 ) -> None:
-    deleted = await user_factory(discord_username="ghost3", status=UserStatus.DELETED)
-    db_session.expunge(deleted)
+    await user_factory(discord_username="ghost3", status=UserStatus.DELETED)
 
     async def _override_get_current_user() -> User:
         from app.domains.users.exceptions import UserDeleted

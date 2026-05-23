@@ -3,8 +3,8 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, Path, Response
 from pydantic import BaseModel
 
-from app.core.security import get_current_user
 from app.domains.notifications.dependencies import get_notification_service
+from app.domains.users.dependencies import get_current_user
 from app.domains.notifications.models import NotificationType
 from app.domains.notifications.schemas import (
     LibraryUpdate,

@@ -2,8 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
 
-from app.core.security import get_current_user
-from app.domains.users.dependencies import get_user_service
+from app.domains.users.dependencies import get_current_user, get_user_service
 from app.domains.users.models import User
 from app.domains.users.schemas import UserRead, UserUpdate
 from app.domains.users.service import UserService

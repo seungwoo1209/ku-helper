@@ -4,7 +4,7 @@
 현재 봇 컨테이너 작업이 우선이라 잠시 보류 중이지만, 백엔드 PR을 다시 시작할 때
 **여기서부터 읽어서 컨텍스트를 복구**할 것.
 
-마지막 갱신: 2026-05-23 — B-1 `require_role` + admin 라우터 완료 확인(코드는 이전 PR 에 포함돼 있었으나 로드맵 누락). `core/security.py:208 require_role(role: UserRole)` + `domains/admin/` 6 파일 + `GET /admin/health`. F-23 신규 엔드포인트는 같은 가드 패턴 재사용. 이전: C-1 Redis 인프라 + C-2 refresh/logout(whitelist) + OAuth state 1회용화 완료. `Settings.redis_url`(required) + `app/core/redis.py`(`create_redis_client`) + lifespan 에 `app.state.redis` 도입. `security.py` 에 `register_refresh_jti` / `revoke_refresh_jti` / `assert_refresh_jti_active` 3개 헬퍼 + `create_refresh_token` 시그니처 변경(`tuple[str, str]` 반환). `AuthService.__init__` 에 redis 주입, `handle_callback` 이 발급 직후 jti SETEX(TTL = `jwt_refresh_expiry_days * 86400`). 신규 `POST /api/v1/auth/refresh`(rotation: old jti DEL → new jti SET) + `POST /api/v1/auth/logout`(jti DEL, idempotent 204). 라우터 prefix `/auth/discord` → `/auth` 변경(엔드포인트 URL 유지: `/auth/discord/login`, `/auth/discord/callback`, 신규 `/auth/refresh`, `/auth/logout`). OAuth state 1회용화: `verify_state_token` 시그니처 `-> dict[str, Any]` 로 확장, 신규 `consume_state_jti(redis, jti)` 가 `state_used:{jti}` SET NX EX `jwt_state_expiry_minutes*60` — `handle_callback` 이 state 검증 직후 호출해 같은 state 두 번째 콜백을 401 로 차단(replay 가 Discord 외부 호출까지 새지 않는 회귀 가드 포함). 테스트 56 → 62(+6: refresh 5건 + state replay 1건). conftest 에 fakeredis `redis_client` 픽스처 + `app.state.redis` 오버라이드. 이전: F-06 TRANSIT 단발 알림 스키마 확장(커밋 `dcb5ab2`).
+마지막 갱신: 2026-05-23 — D-1 `get_current_user` 리팩터 완료(issue #20, 브랜치 `refactor/d1-get-current-user-deps`). `get_current_user`/`require_role`/`_bearer_scheme` 을 `domains/users/dependencies.py` 로 이전하고 `Depends(get_user_repository)` 시그니처로 라우터 세션 공유 — production 의 detached User 경로 제거. `core/security.py` 함수 내부 동적 import 사라져 `core → domains` 역방향 의존 해소. `repository.py:soft_delete` 의 명시 UPDATE 워크어라운드 제거 → ORM 속성 대입+flush. 테스트 픽스처 `db_session.expunge(...)` 잔재 4 곳 정리. 신규 가드 `tests/domains/users/test_auth_guard.py` 2건(실 JWT + 실 DB DELETED/ACTIVE). 테스트 62 → 67(+5). 이전: B-1 `require_role` + admin 라우터 완료 확인. 이전: C-1 Redis 인프라 + C-2 refresh/logout(whitelist) + OAuth state 1회용화 완료. `Settings.redis_url`(required) + `app/core/redis.py`(`create_redis_client`) + lifespan 에 `app.state.redis` 도입. `security.py` 에 `register_refresh_jti` / `revoke_refresh_jti` / `assert_refresh_jti_active` 3개 헬퍼 + `create_refresh_token` 시그니처 변경(`tuple[str, str]` 반환). `AuthService.__init__` 에 redis 주입, `handle_callback` 이 발급 직후 jti SETEX(TTL = `jwt_refresh_expiry_days * 86400`). 신규 `POST /api/v1/auth/refresh`(rotation: old jti DEL → new jti SET) + `POST /api/v1/auth/logout`(jti DEL, idempotent 204). 라우터 prefix `/auth/discord` → `/auth` 변경(엔드포인트 URL 유지: `/auth/discord/login`, `/auth/discord/callback`, 신규 `/auth/refresh`, `/auth/logout`). OAuth state 1회용화: `verify_state_token` 시그니처 `-> dict[str, Any]` 로 확장, 신규 `consume_state_jti(redis, jti)` 가 `state_used:{jti}` SET NX EX `jwt_state_expiry_minutes*60` — `handle_callback` 이 state 검증 직후 호출해 같은 state 두 번째 콜백을 401 로 차단(replay 가 Discord 외부 호출까지 새지 않는 회귀 가드 포함). 테스트 56 → 62(+6: refresh 5건 + state replay 1건). conftest 에 fakeredis `redis_client` 픽스처 + `app.state.redis` 오버라이드. 이전: F-06 TRANSIT 단발 알림 스키마 확장(커밋 `dcb5ab2`).
 
 ## 진행 상황 스냅샷
 
@@ -61,15 +61,12 @@
 
 ## D. 알려진 부채·잠재 회귀
 
-### D-1. `get_current_user`의 별도 세션 사용 — issue #20
-- **위치**: `app/core/security.py:get_current_user`가 `async_session_maker`로 직접 short-lived 세션을 연다.
-- **결과**:
-  - 라우터의 request-scoped 세션과 분리 → 반환된 `User`가 detached.
-  - service에서 ORM 속성 대입이 무효화되는 회귀 패턴 발생 (한 번 잡힌 `soft_delete` 회귀의 근본 원인).
-  - 통합 테스트가 `dependency_overrides[get_current_user]`로 우회하므로 "USER_DELETED 차단" 시나리오를 정확히 재현 못함.
-- **해결 후보**:
-  - `app/domains/users/dependencies.py`로 `get_current_user`를 옮기고 `Depends(get_session)`을 받음. `app/core/security.py`는 토큰 인코딩/디코딩만 남김. 도메인 import 순환은 자연스럽게 풀린다.
-- **시점**: C-1(Redis 블랙리스트)을 도입하면서 `get_current_user`를 어차피 손대게 되므로 같이.
+### D-1. `get_current_user`의 별도 세션 사용 — 완료 (issue #20, 브랜치 `refactor/d1-get-current-user-deps`)
+- `get_current_user` + `require_role` 을 `app/domains/users/dependencies.py` 로 이전 + `Depends(get_user_repository)` 시그니처 — 라우터 세션 공유. `_bearer_scheme` 도 같은 모듈로.
+- `app/core/security.py` 함수 내부 동적 import 제거 → `core → domains` 역방향 의존 사라짐. 토큰 인코딩/디코딩·OAuth state·refresh whitelist 헬퍼만 남음 (예외 4종 잔존).
+- `repository.py:soft_delete` 명시 UPDATE 워크어라운드 제거 → `user.status = DELETED; await flush()` 단순 ORM 패턴 복원.
+- 테스트 픽스처(`authed_client`, `admin_authed_client`) 의 `db_session.expunge(user)` 시뮬레이션 제거 — production 의 detached 경로가 더 이상 존재하지 않으므로 시뮬레이션 자체가 잘못된 가드였음.
+- 신규 회귀 가드 `tests/domains/users/test_auth_guard.py` 2건: `dependency_overrides` 우회 없이 실 JWT + 실 DB 로 ACTIVE → 200, DELETED → 401 `USER_DELETED` 검증.
 
 ### D-2. alembic 자체 회귀를 테스트가 못 잡음
 - **현재**: `tests/conftest.py:test_engine`이 `Base.metadata.create_all`로 스키마 셋업. alembic upgrade 경로는 안 돌아감.
@@ -121,6 +118,6 @@
 
 ## 권장 순서
 
-**~~C-1 (Redis)~~ → ~~C-2 (로그아웃/refresh)~~ → ~~OAuth state Redis 단발성 전환~~ → ~~B-1 (require_role)~~ → D-1 (get_current_user 리팩터) → A-2 (jwt 길이) → B-2 (활성 시간대, 봇 합의 후) → D-2 (alembic 왕복) → D-3 (CI) → A-1 (PATCH /me) → E-* (봇 합의 후)**
+**~~C-1 (Redis)~~ → ~~C-2 (로그아웃/refresh)~~ → ~~OAuth state Redis 단발성 전환~~ → ~~B-1 (require_role)~~ → ~~D-1 (get_current_user 리팩터)~~ → A-2 (jwt 길이) → B-2 (활성 시간대, 봇 합의 후) → D-2 (alembic 왕복) → D-3 (CI) → A-1 (PATCH /me) → E-* (봇 합의 후)**
 
-봇 컨테이너 작업과 병행할 때 가장 충돌이 적은 영역은 **D-1 / A-2 / D-3**.
+봇 컨테이너 작업과 병행할 때 가장 충돌이 적은 영역은 **A-2 / D-3**.
