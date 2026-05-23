@@ -4,7 +4,7 @@
 현재 봇 컨테이너 작업이 우선이라 잠시 보류 중이지만, 백엔드 PR을 다시 시작할 때
 **여기서부터 읽어서 컨텍스트를 복구**할 것.
 
-마지막 갱신: 2026-05-21 — C-1 Redis 인프라 + C-2 refresh/logout(whitelist) + OAuth state 1회용화 완료. `Settings.redis_url`(required) + `app/core/redis.py`(`create_redis_client`) + lifespan 에 `app.state.redis` 도입. `security.py` 에 `register_refresh_jti` / `revoke_refresh_jti` / `assert_refresh_jti_active` 3개 헬퍼 + `create_refresh_token` 시그니처 변경(`tuple[str, str]` 반환). `AuthService.__init__` 에 redis 주입, `handle_callback` 이 발급 직후 jti SETEX(TTL = `jwt_refresh_expiry_days * 86400`). 신규 `POST /api/v1/auth/refresh`(rotation: old jti DEL → new jti SET) + `POST /api/v1/auth/logout`(jti DEL, idempotent 204). 라우터 prefix `/auth/discord` → `/auth` 변경(엔드포인트 URL 유지: `/auth/discord/login`, `/auth/discord/callback`, 신규 `/auth/refresh`, `/auth/logout`). OAuth state 1회용화: `verify_state_token` 시그니처 `-> dict[str, Any]` 로 확장, 신규 `consume_state_jti(redis, jti)` 가 `state_used:{jti}` SET NX EX `jwt_state_expiry_minutes*60` — `handle_callback` 이 state 검증 직후 호출해 같은 state 두 번째 콜백을 401 로 차단(replay 가 Discord 외부 호출까지 새지 않는 회귀 가드 포함). 테스트 56 → 62(+6: refresh 5건 + state replay 1건). conftest 에 fakeredis `redis_client` 픽스처 + `app.state.redis` 오버라이드. 이전: F-06 TRANSIT 단발 알림 스키마 확장(커밋 `dcb5ab2`).
+마지막 갱신: 2026-05-23 — B-1 `require_role` + admin 라우터 완료 확인(코드는 이전 PR 에 포함돼 있었으나 로드맵 누락). `core/security.py:208 require_role(role: UserRole)` + `domains/admin/` 6 파일 + `GET /admin/health`. F-23 신규 엔드포인트는 같은 가드 패턴 재사용. 이전: C-1 Redis 인프라 + C-2 refresh/logout(whitelist) + OAuth state 1회용화 완료. `Settings.redis_url`(required) + `app/core/redis.py`(`create_redis_client`) + lifespan 에 `app.state.redis` 도입. `security.py` 에 `register_refresh_jti` / `revoke_refresh_jti` / `assert_refresh_jti_active` 3개 헬퍼 + `create_refresh_token` 시그니처 변경(`tuple[str, str]` 반환). `AuthService.__init__` 에 redis 주입, `handle_callback` 이 발급 직후 jti SETEX(TTL = `jwt_refresh_expiry_days * 86400`). 신규 `POST /api/v1/auth/refresh`(rotation: old jti DEL → new jti SET) + `POST /api/v1/auth/logout`(jti DEL, idempotent 204). 라우터 prefix `/auth/discord` → `/auth` 변경(엔드포인트 URL 유지: `/auth/discord/login`, `/auth/discord/callback`, 신규 `/auth/refresh`, `/auth/logout`). OAuth state 1회용화: `verify_state_token` 시그니처 `-> dict[str, Any]` 로 확장, 신규 `consume_state_jti(redis, jti)` 가 `state_used:{jti}` SET NX EX `jwt_state_expiry_minutes*60` — `handle_callback` 이 state 검증 직후 호출해 같은 state 두 번째 콜백을 401 로 차단(replay 가 Discord 외부 호출까지 새지 않는 회귀 가드 포함). 테스트 56 → 62(+6: refresh 5건 + state replay 1건). conftest 에 fakeredis `redis_client` 픽스처 + `app.state.redis` 오버라이드. 이전: F-06 TRANSIT 단발 알림 스키마 확장(커밋 `dcb5ab2`).
 
 ## 진행 상황 스냅샷
 
@@ -30,14 +30,10 @@
 
 ## B. 중기 — F-18 · 관리자
 
-### B-1. `require_role` 가드 + 관리자 라우터 (F-23)  (우선순위: 높음)
-- **현재**: `User.role` 컬럼은 0003에서 추가되어 존재하나 가드/라우터 없음.
-- **추가**:
-  - `app/core/security.py`에 `def require_role(role: UserRole) -> Callable[..., Awaitable[User]]` 헬퍼.
-    내부에서 `Depends(get_current_user)` + `UserRole` 비교 → 도메인 예외 `NotAuthorizedForRole`(403).
-  - `app/domains/admin/` 도메인 신설 (CLAUDE.md의 6-파일 규칙). 라우터 prefix `/admin`.
-  - 첫 엔드포인트: `GET /admin/health`(권한 가드만 검증) → 이후 알림 발송 통계 등 확장.
-- **테스트**: happy(ADMIN) + forbidden(USER) 두 케이스.
+### B-1. `require_role` 가드 + 관리자 라우터 (F-23) — 완료
+- `app/core/security.py:208` `require_role(role: UserRole) -> Callable[..., Awaitable[User]]` 헬퍼 — `Depends(get_current_user)` 합성 후 `current_user.role != role` 비교 → `NotAuthorizedForRole`(403).
+- `app/domains/admin/` 6 파일 모두 작성. 라우터 prefix `/admin`, 첫 엔드포인트 `GET /admin/health` → `AdminHealthRead({"status": "ok"})` 반환. 401/403 responses OpenAPI 문서화 완료.
+- F-23 관리자 대시보드 신규 엔드포인트는 같은 `Depends(require_role(UserRole.ADMIN))` 패턴 재사용.
 
 ### B-2. F-18 활성 시간대  (우선순위: 보통, 봇 합의 후)
 - **요구사항**: 평일/주말 별 알림 수신 시작·종료 시각.
@@ -65,7 +61,7 @@
 
 ## D. 알려진 부채·잠재 회귀
 
-### D-1. `get_current_user`의 별도 세션 사용
+### D-1. `get_current_user`의 별도 세션 사용 — issue #20
 - **위치**: `app/core/security.py:get_current_user`가 `async_session_maker`로 직접 short-lived 세션을 연다.
 - **결과**:
   - 라우터의 request-scoped 세션과 분리 → 반환된 `User`가 detached.
@@ -125,6 +121,6 @@
 
 ## 권장 순서
 
-**~~C-1 (Redis)~~ → ~~C-2 (로그아웃/refresh)~~ → ~~OAuth state Redis 단발성 전환~~ → B-1 (require_role) → A-2 (jwt 길이) → D-1 (get_current_user 리팩터) → B-2 (활성 시간대, 봇 합의 후) → D-2 (alembic 왕복) → D-3 (CI) → A-1 (PATCH /me) → E-* (봇 합의 후)**
+**~~C-1 (Redis)~~ → ~~C-2 (로그아웃/refresh)~~ → ~~OAuth state Redis 단발성 전환~~ → ~~B-1 (require_role)~~ → D-1 (get_current_user 리팩터) → A-2 (jwt 길이) → B-2 (활성 시간대, 봇 합의 후) → D-2 (alembic 왕복) → D-3 (CI) → A-1 (PATCH /me) → E-* (봇 합의 후)**
 
-봇 컨테이너 작업과 병행할 때 가장 충돌이 적은 영역은 **B-1 / A-2 / D-1 / D-3**.
+봇 컨테이너 작업과 병행할 때 가장 충돌이 적은 영역은 **D-1 / A-2 / D-3**.
