@@ -1,8 +1,8 @@
 import pytest
 from httpx import AsyncClient
 
-from app.core.security import get_current_user
 from app.domains.notifications.models import NotificationType
+from app.domains.users.dependencies import get_current_user
 from app.domains.users.models import User
 from app.main import app
 

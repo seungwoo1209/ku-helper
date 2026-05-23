@@ -1,22 +1,14 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import Any, cast
 from uuid import uuid4
 
 import jwt
-from fastapi import Depends
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis.asyncio import Redis
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppException
-
-if TYPE_CHECKING:
-    from app.domains.users.models import User, UserRole
-
-
-_bearer_scheme = HTTPBearer(auto_error=False)
 
 # Redis key prefix for refresh-token whitelist (jti -> user_id). 발급 시 SETEX,
 # 로그아웃·rotation 시 DEL. 키가 없으면 그 refresh 는 사용 불가.
@@ -176,47 +168,3 @@ async def consume_state_jti(redis: Redis, jti: str) -> None:
         raise InvalidAuthToken()
 
 
-async def get_current_user(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)
-    ],
-) -> "User":
-    # UserRepository는 호출 시점에 import (모듈 로드 시 도메인 결합 회피).
-    from app.core.database import async_session_maker
-    from app.domains.users.dependencies import get_user_repository
-    from app.domains.users.exceptions import UserDeleted
-    from app.domains.users.models import UserStatus
-
-    if credentials is None:
-        raise AuthTokenMissing()
-    payload = decode_token(credentials.credentials, TokenType.ACCESS)
-    try:
-        user_id = int(payload["sub"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise InvalidAuthToken() from exc
-
-    async with async_session_maker() as session:
-        repository = get_user_repository(session)
-        user = await repository.get_by_id(user_id)
-    if user is None:
-        raise CurrentUserNotFound()
-    if user.status == UserStatus.DELETED:
-        raise UserDeleted()
-    return user
-
-
-def require_role(role: "UserRole") -> Callable[..., Awaitable["User"]]:
-    """role 가드 의존성을 만든다.
-
-    라우터에서 `admin: Annotated[User, Depends(require_role(UserRole.ADMIN))]` 형태로 합성.
-    get_current_user 통과 후 user.role 비교 — DELETED 사용자는 401 이 먼저 거절한다.
-    """
-
-    async def _guard(
-        current_user: Annotated["User", Depends(get_current_user)],
-    ) -> "User":
-        if current_user.role != role:
-            raise NotAuthorizedForRole()
-        return current_user
-
-    return _guard
