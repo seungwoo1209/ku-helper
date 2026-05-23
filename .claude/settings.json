@@ -61,9 +61,6 @@
       "Bash(cat:*)",
       "Bash(wc:*)",
       "Bash(docker:*)"
-    ],
-    "deny": [
-      "Bash(git push:*)"
     ]
   }
 }
