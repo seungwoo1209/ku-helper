@@ -18,10 +18,15 @@ from __future__ import annotations
 
 import os
 
-# Settings.redis_url 은 필수 필드. 테스트는 fakeredis 로 app.state.redis 를 덮어쓰지만
-# Settings 인스턴스화 자체에는 URL 문자열이 필요하므로 placeholder 를 미리 주입한다.
+# Settings 의 validator 는 use_iam_auth=False 일 때 DATABASE_URL / REDIS_URL 을 둘 다
+# 요구한다. 테스트는 실 DB 는 test_engine 픽스처로, redis 는 fakeredis 로 오버라이드
+# 하지만 Settings 인스턴스화 자체에 문자열이 필요하므로 placeholder 를 미리 주입.
 # app.main 임포트 시점에 get_settings() 가 호출되므로 반드시 그 이전에 설정.
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+asyncpg://ku_helper:ku_helper_test@localhost:5433/ku_helper_test",
+)
 
 from collections.abc import AsyncIterator  # noqa: E402
 
