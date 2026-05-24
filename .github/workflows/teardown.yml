@@ -1,0 +1,82 @@
+name: teardown
+
+# infra/ephemeral 전체 삭제. RDS final snapshot 자동 생성 + 추가로 manual snapshot 1개를
+# 안전망으로 더 떠 둔다. persistent / bootstrap 은 절대 건드리지 않는다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: '실수 방지를 위해 정확히 "TEARDOWN" 입력.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-northeast-2
+  TFSTATE_BUCKET_PREFIX: ku-helper-tfstate
+  TFLOCK_TABLE: ku-helper-tflock
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate confirm input
+        run: |
+          if [ "${{ inputs.confirm }}" != "TEARDOWN" ]; then
+            echo "confirm input must be exactly TEARDOWN, got: ${{ inputs.confirm }}" >&2
+            exit 1
+          fi
+
+  pre-snapshot:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Manual snapshot
+        run: |
+          STAMP=$(date -u +"%Y%m%d-%H%M%S")
+          aws rds create-db-snapshot \
+            --db-instance-identifier ku-helper-pg \
+            --db-snapshot-identifier "ku-helper-manual-${STAMP}" || true
+          # 실패해도 terraform 의 final_snapshot 가 마지막 안전망. 진행.
+
+  terraform-destroy:
+    needs: pre-snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+
+      - name: terraform destroy
+        working-directory: infra/ephemeral
+        env:
+          TF_VAR_tfstate_bucket: ${{ env.TFSTATE_BUCKET_PREFIX }}-${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}
+          TF_VAR_developer_ip_cidr: "0.0.0.0/32"
+          TF_VAR_jwt_secret: "destroy"
+          TF_VAR_discord_client_id: "destroy"
+          TF_VAR_discord_client_secret: "destroy"
+          TF_VAR_discord_bot_token: "destroy"
+          TF_VAR_ghcr_pat: "destroy"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${TF_VAR_tfstate_bucket}" \
+            -backend-config="dynamodb_table=${TFLOCK_TABLE}" \
+            -backend-config="region=${AWS_REGION}"
+          terraform destroy -auto-approve
