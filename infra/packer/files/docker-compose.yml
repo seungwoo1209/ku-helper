@@ -1,0 +1,39 @@
+# /opt/ku-helper/docker-compose.yml — app EC2 가 부팅 시 실행할 compose stack
+#
+# 환경변수는 /etc/ku-helper/app.env (ephemeral EC2 user-data 가 SSM Parameter Store
+# 에서 fetch 하여 떨어뜨림) 에서 주입된다. systemd 의 EnvironmentFile + compose 의
+# env_file 양쪽 다 같은 파일을 가리킨다.
+
+services:
+  backend:
+    image: ghcr.io/seungwoo1209/ku-helper-backend:main
+    container_name: ku-helper-backend
+    restart: unless-stopped
+    env_file:
+      - /etc/ku-helper/app.env
+    ports:
+      - "8000:8000"
+    logging:
+      driver: journald
+      options:
+        tag: ku-helper-backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  bot:
+    image: ghcr.io/seungwoo1209/ku-helper-bot:main
+    container_name: ku-helper-bot
+    restart: unless-stopped
+    env_file:
+      - /etc/ku-helper/app.env
+    logging:
+      driver: journald
+      options:
+        tag: ku-helper-bot
+    depends_on:
+      backend:
+        condition: service_healthy
