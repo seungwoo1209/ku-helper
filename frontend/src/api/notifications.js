@@ -1,34 +1,38 @@
 import { fmtTime } from '../utils/time';
+import { getAccessToken, callRefresh } from './auth';
 
-const TOKEN_KEY = 'ku_access_token';
 const BASE = '/api/v1/me/notifications';
+const IMMEDIATE = '/api/v1/me/immediate-send';
 
 function authHeaders() {
-  const token = localStorage.getItem(TOKEN_KEY);
-  return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+  return { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken()}` };
+}
+
+// 401 시 토큰 갱신 후 1회 재시도
+async function authFetch(url, options = {}) {
+  let res = await fetch(url, { ...options, headers: authHeaders() });
+  if (res.status === 401) {
+    const newToken = await callRefresh();
+    if (newToken) res = await fetch(url, { ...options, headers: authHeaders() });
+  }
+  return res;
 }
 
 export async function listNotifications() {
-  const res = await fetch(BASE, { headers: authHeaders() });
+  const res = await authFetch(BASE);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
 export async function createNotification(payload) {
-  const res = await fetch(BASE, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
-  });
+  const res = await authFetch(BASE, { method: 'POST', body: JSON.stringify(payload) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
 export async function updateNotification(type, id, payload) {
-  const path = type.toLowerCase();
-  const res = await fetch(`${BASE}/${path}/${id}`, {
+  const res = await authFetch(`${BASE}/${type.toLowerCase()}/${id}`, {
     method: 'PATCH',
-    headers: authHeaders(),
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -36,11 +40,35 @@ export async function updateNotification(type, id, payload) {
 }
 
 export async function deleteNotification(id) {
-  const res = await fetch(`${BASE}/${id}`, {
-    method: 'DELETE',
-    headers: authHeaders(),
-  });
+  const res = await authFetch(`${BASE}/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function immediateSendLunch() {
+  const res = await authFetch(`${IMMEDIATE}/lunch`, { method: 'POST' });
+  if (res.status === 429) throw new Error('RATE_LIMITED');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function immediateSendTransit(station_name, line) {
+  const res = await authFetch(`${IMMEDIATE}/transit`, {
+    method: 'POST',
+    body: JSON.stringify({ station_name, line }),
+  });
+  if (res.status === 429) throw new Error('RATE_LIMITED');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function immediateSendLibrary(reading_room_id) {
+  const res = await authFetch(`${IMMEDIATE}/library`, {
+    method: 'POST',
+    body: JSON.stringify({ reading_room_id }),
+  });
+  if (res.status === 429) throw new Error('RATE_LIMITED');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 }
 
 /* API 응답 → 화면 표시용 형태 변환 */
@@ -59,7 +87,6 @@ function toDisplayItem(n) {
           { k: '노선', v: c.line },
           { k: '방향', v: c.direction },
           { k: '발송', v: `도착 ${c.minutes_before}분 전` },
-          { k: '혼잡도', v: c.include_congestion ? 'on' : 'off' },
         ],
       };
     }
@@ -85,7 +112,6 @@ function toDisplayItem(n) {
       conds: [
         { k: '시각', v: at },
         { k: '추천', v: `${c.recommend_count}곳` },
-        ...(c.max_price ? [{ k: '예산', v: `≤ ₩${c.max_price.toLocaleString()}` }] : []),
         { k: '오늘의 추천', v: c.highlight_today_pick ? '강조' : '끄기' },
       ],
     };

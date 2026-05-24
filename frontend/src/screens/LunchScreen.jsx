@@ -34,7 +34,7 @@ const LunchScreen = ({ state, setState, onEdit, onAdd }) => {
     <>
       <div className="page-intro">
         <p>
-          학식 메뉴와 예산 범위 내 주변 음식점을 정해진 시간에 디스코드 DM으로 보내드립니다.
+          학식 메뉴와 주변 음식점을 정해진 시간에 디스코드 DM으로 보내드립니다.
         </p>
       </div>
 

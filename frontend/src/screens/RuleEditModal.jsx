@@ -53,15 +53,6 @@ function TransitForm({ config, onChange }) {
           </Field>
         </div>
       )}
-      <Field label="혼잡도 포함">
-        <div style={{ display: 'flex', gap: 8 }}>
-          {[['true','포함'],['false','제외']].map(([v, l]) => (
-            <button key={v} type="button" className="chip"
-              aria-pressed={String(c.include_congestion) === v}
-              onClick={() => set('include_congestion', v === 'true')}>{l}</button>
-          ))}
-        </div>
-      </Field>
     </>
   );
 }
@@ -82,10 +73,6 @@ function LunchForm({ config, onChange }) {
             value={c.recommend_count} onChange={e => set('recommend_count', Number(e.target.value))} />
         </Field>
       </div>
-      <Field label="주변 음식점 최대 가격 (선택)">
-        <input className="input" type="number" min={0} placeholder="예) 9000 (빈칸이면 제한 없음)"
-          value={c.max_price ?? ''} onChange={e => set('max_price', e.target.value ? Number(e.target.value) : null)} />
-      </Field>
       <Field label="오늘의 추천 강조">
         <div style={{ display: 'flex', gap: 8 }}>
           {[['true','켜기'],['false','끄기']].map(([v, l]) => (
@@ -100,7 +87,12 @@ function LunchForm({ config, onChange }) {
 }
 
 /* ── Library 폼 ─────────────────────────────────── */
-const READING_ROOMS = ['제1열람실','제2열람실','제3열람실','제4열람실','대학원열람실'];
+const READING_ROOMS = [
+  { id: 1, label: '제1열람실' },
+  { id: 2, label: '제2열람실' },
+  { id: 3, label: '제3열람실' },
+  { id: 5, label: '대학원열람실' },
+];
 
 function LibraryForm({ config, onChange }) {
   const c = config;
@@ -109,8 +101,8 @@ function LibraryForm({ config, onChange }) {
   return (
     <>
       <Field label="열람실">
-        <select className="select" value={c.reading_room_id} onChange={e => set('reading_room_id', e.target.value)}>
-          {READING_ROOMS.map(r => <option key={r} value={r}>{r}</option>)}
+        <select className="select" value={c.reading_room_id} onChange={e => set('reading_room_id', Number(e.target.value))}>
+          {READING_ROOMS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
         </select>
       </Field>
       <div className="field-row">
@@ -130,9 +122,9 @@ function LibraryForm({ config, onChange }) {
 /* ── 기본 config 초기값 ──────────────────────────── */
 function defaultConfig(kind, existing) {
   if (existing) return kind === 'transit' ? { direction: '상행', ...existing } : { ...existing };
-  if (kind === 'transit') return { mode: 'arrival', station_name: '', line: '2호선', direction: '상행', minutes_before: 3, include_congestion: true, start_time: '08:00', end_time: '09:30', repeat_interval_minutes: 15 };
-  if (kind === 'lunch')   return { notify_at: '11:30', max_price: null, recommend_count: 3, highlight_today_pick: true };
-  if (kind === 'library') return { reading_room_id: READING_ROOMS[0], threshold: 20, urgent_threshold: null };
+  if (kind === 'transit') return { mode: 'arrival', station_name: '', line: '2호선', direction: '상행', minutes_before: 3, start_time: '08:00', end_time: '09:30', repeat_interval_minutes: 15 };
+  if (kind === 'lunch')   return { notify_at: '11:30', recommend_count: 3, highlight_today_pick: true };
+  if (kind === 'library') return { reading_room_id: 1, threshold: 20, urgent_threshold: null };
   return {};
 }
 

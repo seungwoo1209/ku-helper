@@ -25,7 +25,7 @@ const TransitScreen = ({ state, setState, onEdit, onAdd }) => {
       <div className="page-intro">
         <p>
           역과 노선, 방향, 도착 N분 전 또는 정기 간격을 조합해 알림 규칙을 만듭니다.
-          조건이 충족되면 디스코드 DM으로 도착 정보·혼잡도·지연 정보가 함께 전송됩니다.
+          조건이 충족되면 디스코드 DM으로 도착 정보·지연 정보가 함께 전송됩니다.
         </p>
       </div>
 
@@ -51,7 +51,6 @@ const TransitScreen = ({ state, setState, onEdit, onAdd }) => {
         sub="08:24 도착 · 3분 전 발송됨. 다음 열차는 08:31 도착 예정입니다."
         fields={[
           { k: "도착", v: "3분 후" },
-          { k: "혼잡도", v: "보통" },
           { k: "지연", v: "0분" },
         ]}
         footnote="campus 알리미 · 2026.05.13 08:21:04"

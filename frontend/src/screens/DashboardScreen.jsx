@@ -18,7 +18,7 @@ function lunchRows(rules) {
   const active = rules.filter(r => r.on).slice(0, 2);
   if (!active.length) return [{ left: '등록된 점심 알림 없음', when: '–' }];
   return active.map(r => ({
-    left: `추천 ${r.config?.recommend_count ?? 3}곳${r.config?.max_price ? ` · ₩${r.config.max_price.toLocaleString()} 이하` : ''}`,
+    left: `추천 ${r.config?.recommend_count ?? 3}곳`,
     when: `평일 ${fmtTime(r.config?.notify_at ?? '')}`,
   }));
 }
