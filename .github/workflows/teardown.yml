@@ -62,6 +62,8 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ~1.5
+          # wrapper 가 stdout 에 추가 텍스트를 섞어 $(terraform output -raw ...) 치환을 오염시킨다.
+          terraform_wrapper: false
 
       - name: terraform destroy
         working-directory: infra/ephemeral
