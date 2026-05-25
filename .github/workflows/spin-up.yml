@@ -113,18 +113,11 @@ jobs:
       - name: terraform apply
         working-directory: infra/ephemeral
         env:
+          # 시크릿은 terraform 으로 주입하지 않는다(state 평문 방지).
+          # 시크릿 SSM 파라미터는 persistent 모듈이 placeholder 로 만들고, 실제 값은 사람이 1회
+          # aws ssm put-parameter 로 등록한다(infra/roadmap.md 참고).
           TF_VAR_tfstate_bucket: ${{ env.TFSTATE_BUCKET_PREFIX }}-${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}
           TF_VAR_developer_ip_cidr: ${{ inputs.developer_ip_cidr }}
-          TF_VAR_jwt_secret: ${{ secrets.KU_HELPER_JWT_SECRET }}
-          TF_VAR_discord_client_id: ${{ secrets.KU_HELPER_DISCORD_CLIENT_ID }}
-          TF_VAR_discord_client_secret: ${{ secrets.KU_HELPER_DISCORD_CLIENT_SECRET }}
-          TF_VAR_discord_bot_token: ${{ secrets.KU_HELPER_DISCORD_BOT_TOKEN }}
-          TF_VAR_subway_api_key: ${{ secrets.KU_HELPER_SUBWAY_API_KEY }}
-          TF_VAR_naver_search_client_id: ${{ secrets.KU_HELPER_NAVER_SEARCH_CLIENT_ID }}
-          TF_VAR_naver_search_client_secret: ${{ secrets.KU_HELPER_NAVER_SEARCH_CLIENT_SECRET }}
-          TF_VAR_library_seat_url: ${{ secrets.KU_HELPER_LIBRARY_SEAT_URL }}
-          TF_VAR_admin_discord_ids: ${{ secrets.KU_HELPER_ADMIN_DISCORD_IDS }}
-          TF_VAR_ghcr_pat: ${{ secrets.KU_HELPER_GHCR_PAT }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           terraform init \
@@ -259,6 +252,8 @@ jobs:
           ssh -i $RUNNER_TEMP/ku-helper.pem -o StrictHostKeyChecking=accept-new ec2-user@${APP_IP} <<EOF
           set -euo pipefail
           cd /opt/ku-helper
+          # SSM 의 최신 시크릿으로 app.env 와 GitHub Container Registry 로그인 갱신
+          sudo /opt/ku-helper/refresh-env.sh
           docker compose pull
           docker compose up -d
           EOF

@@ -73,60 +73,7 @@ variable "db_master_username" {
   default     = "postgres"
 }
 
-# ───── 애플리케이션 시크릿 (SSM Parameter Store 로 동기화) ─────
-# 워크플로가 GitHub Secret 으로부터 `terraform apply -var ...` 로 주입한다.
-
-variable "discord_client_id" {
-  type      = string
-  sensitive = true
-}
-
-variable "discord_client_secret" {
-  type      = string
-  sensitive = true
-}
-
-variable "discord_bot_token" {
-  type      = string
-  sensitive = true
-}
-
-variable "jwt_secret" {
-  type      = string
-  sensitive = true
-}
-
-variable "subway_api_key" {
-  type      = string
-  sensitive = true
-  default   = ""
-}
-
-variable "naver_search_client_id" {
-  type      = string
-  sensitive = true
-  default   = ""
-}
-
-variable "naver_search_client_secret" {
-  type      = string
-  sensitive = true
-  default   = ""
-}
-
-variable "library_seat_url" {
-  type    = string
-  default = ""
-}
-
-variable "admin_discord_ids" {
-  description = "comma-separated discord user IDs. 봇 관리자 알림 수신자."
-  type        = string
-  default     = ""
-}
-
-variable "ghcr_pat" {
-  description = "GHCR read:packages PAT. EC2 가 docker login ghcr.io 시 사용."
-  type        = string
-  sensitive   = true
-}
+# ───── 애플리케이션 시크릿 ─────
+# 시크릿은 terraform 변수로 받지 않는다. terraform 은 ssm_parameters.tf 에서 placeholder
+# 껍데기만 만들고, 실제 값은 GitHub Actions 워크플로가 aws ssm put-parameter 로 주입한다.
+# 따라서 시크릿 평문이 terraform state(S3) 에 남지 않는다. 상세는 infra/roadmap.md 참고.

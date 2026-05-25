@@ -5,14 +5,27 @@ set -euo pipefail
 # ssm-agent 는 AL2023 기본 포함.
 
 dnf -y update
-dnf -y install docker docker-compose-plugin amazon-cloudwatch-agent jq
+dnf -y install docker amazon-cloudwatch-agent jq
+
+# AL2023 기본 리포에는 docker-compose-plugin 패키지가 없다(그 이름은 Docker 공식 yum 리포
+# 전용이다). 따라서 compose v2 플러그인 바이너리를 직접 받아 docker 의 cli-plugins 경로에
+# 설치한다. uname -m 으로 아키텍처를 맞춰 x86_64 와 aarch64 양쪽을 지원한다.
+DOCKER_COMPOSE_VERSION="v2.29.7"
+install -d -m 0755 /usr/libexec/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" \
+  -o /usr/libexec/docker/cli-plugins/docker-compose
+chmod 0755 /usr/libexec/docker/cli-plugins/docker-compose
 
 systemctl enable docker
 systemctl start docker
 usermod -aG docker ec2-user
 
+# compose 플러그인이 정상 설치되었는지 빌드 시점에 검증한다(daemon 없이 동작).
+docker compose version
+
 install -d -m 0755 /opt/ku-helper /etc/ku-helper
 install -m 0644 /tmp/docker-compose.yml /opt/ku-helper/docker-compose.yml
+install -m 0755 /tmp/refresh-env.sh /opt/ku-helper/refresh-env.sh
 
 install -d -m 0755 /opt/aws/amazon-cloudwatch-agent/etc
 install -m 0644 /tmp/cloudwatch-agent.json /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
@@ -48,4 +61,4 @@ systemctl daemon-reload
 systemctl enable ku-helper-app.service
 
 dnf clean all
-rm -rf /var/cache/dnf /tmp/docker-compose.yml /tmp/cloudwatch-agent.json
+rm -rf /var/cache/dnf /tmp/docker-compose.yml /tmp/cloudwatch-agent.json /tmp/refresh-env.sh

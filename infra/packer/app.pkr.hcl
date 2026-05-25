@@ -18,7 +18,7 @@ variable "aws_region" {
 variable "ami_name_prefix" {
   type        = string
   default     = "ku-helper-app"
-  description = "persistent 모듈의 aws_ami data source 가 `${prefix}-*` 으로 lookup."
+  description = "persistent 모듈의 aws_ami data source 가 <prefix>-* 으로 lookup."
 }
 
 variable "instance_type" {
@@ -33,7 +33,7 @@ source "amazon-ebs" "app" {
   ssh_username  = "ec2-user"
 
   ami_name        = "${var.ami_name_prefix}-{{timestamp}}"
-  ami_description = "ku-helper app/bastion AMI — AL2023 + docker + compose v2 + cwagent + awscli v2"
+  ami_description = "ku-helper app/bastion AMI - AL2023 + docker + compose v2 + cwagent + awscli v2"
 
   source_ami_filter {
     filters = {
@@ -76,6 +76,11 @@ build {
   provisioner "file" {
     source      = "files/docker-compose.yml"
     destination = "/tmp/docker-compose.yml"
+  }
+
+  provisioner "file" {
+    source      = "files/refresh-env.sh"
+    destination = "/tmp/refresh-env.sh"
   }
 
   provisioner "shell" {

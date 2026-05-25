@@ -1,42 +1,20 @@
 locals {
-  app_env_keys = concat(keys(local.app_config), keys(local.app_secrets))
-
+  # 환경 파일 작성과 GitHub Container Registry 로그인은 AMI 안의 refresh-env.sh 가 담당한다.
+  # 첫 부팅 시점에는 시크릿 파라미터가 아직 placeholder 일 수 있어 앱 기동이 실패할 수 있으나,
+  # 이후 워크플로의 put-secrets 와 rollout(refresh-env.sh 재호출)이 실제 값으로 복구한다.
   app_user_data = <<-EOT
     #!/bin/bash
     set -euo pipefail
     exec > >(tee -a /var/log/ku-helper-userdata.log) 2>&1
 
-    REGION="${var.aws_region}"
-    PROJECT="${var.project}"
+    # 1) SSM 에서 환경 파일 작성 + GitHub Container Registry 로그인
+    /opt/ku-helper/refresh-env.sh || true
 
-    install -d -m 0700 /etc/ku-helper
-
-    # 1) SSM Parameter Store 에서 /ku-helper/app/* 전부 fetch → /etc/ku-helper/app.env
-    aws ssm get-parameters-by-path \
-      --region "$REGION" \
-      --path "/$PROJECT/app/" \
-      --with-decryption \
-      --recursive \
-      --query "Parameters[*].[Name,Value]" \
-      --output text | \
-    awk -F'\t' -v project="$PROJECT" '{
-      n=$1; sub("/"project"/app/", "", n);
-      v=$2;
-      gsub("\"", "\\\"", v);
-      printf "%s=\"%s\"\n", n, v;
-    }' > /etc/ku-helper/app.env
-    chmod 0600 /etc/ku-helper/app.env
-
-    # 2) GHCR 로그인
-    GHCR_PAT=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/ghcr/pat" --with-decryption --query Parameter.Value --output text)
-    echo "$GHCR_PAT" | docker login ghcr.io -u ${var.github_owner} --password-stdin
-    unset GHCR_PAT
-
-    # 3) CloudWatch agent 시작
+    # 2) CloudWatch agent 시작
     systemctl start amazon-cloudwatch-agent || true
 
-    # 4) compose stack 부팅
-    systemctl start ku-helper-app.service
+    # 3) compose stack 부팅
+    systemctl start ku-helper-app.service || true
   EOT
 }
 
@@ -69,11 +47,12 @@ resource "aws_instance" "app" {
     role = "app"
   }
 
+  # 시크릿 파라미터(/ku-helper/app/* 시크릿, /ku-helper/ghcr/pat)는 terraform 이 아니라
+  # bootstrap-secrets 스크립트가 생성하므로 여기서 depends_on 대상이 아니다. EC2 부팅 시점에
+  # 파라미터가 존재하도록 스크립트를 먼저 실행해야 한다.
   depends_on = [
     aws_db_instance.main,
     aws_elasticache_serverless_cache.main,
     aws_ssm_parameter.app_config,
-    aws_ssm_parameter.app_secrets,
-    aws_ssm_parameter.ghcr_pat,
   ]
 }

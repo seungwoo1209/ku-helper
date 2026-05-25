@@ -1,39 +1,40 @@
-# EC2 user-data 가 SSM Parameter Store 에서 fetch 하여 /etc/ku-helper/app.env 로 떨어뜨린다.
+# EC2 의 refresh-env.sh 가 SSM Parameter Store 에서 fetch 하여 /etc/ku-helper/app.env 로 떨어뜨린다.
 # 모든 파라미터는 /ku-helper/app/* 네임스페이스 (persistent IAM Role 의 ssm:GetParameter* 정책 범위).
+#
+# 시크릿 파라미터(/ku-helper/app/* 의 시크릿과 /ku-helper/ghcr/pat)는 terraform 이 관리하지 않는다.
+# scripts/bootstrap-secrets-to-parameter-store.sh 가 생성하고 값을 채운다. terraform 이 placeholder
+# 라도 만들면 스크립트와 생성 주체가 겹쳐 ParameterAlreadyExists 충돌이 나기 때문이다. 여기서는
+# teardown 마다 재생성해도 무방한 비시크릿 설정만 관리한다.
 
 locals {
   cache_endpoint = aws_elasticache_serverless_cache.main.endpoint[0].address
 
+  # 비시크릿 동작 설정과 연결 정보. 시크릿이 아니므로 terraform 이 값까지 관리한다.
   app_config = {
     # 동작 모드
-    ENVIRONMENT   = "production"
-    LOG_LEVEL     = "INFO"
-    USE_IAM_AUTH  = "true"
-    AWS_REGION    = var.aws_region
+    ENVIRONMENT  = "production"
+    LOG_LEVEL    = "INFO"
+    USE_IAM_AUTH = "true"
+    AWS_REGION   = var.aws_region
+
+    # GitHub Container Registry 소유자 (refresh-env.sh 가 docker login 시 사용)
+    GHCR_OWNER = var.github_owner
+
+    # Discord OAuth 콜백 URL. backend config 의 discord_redirect_uri 는 기본값이 없는
+    # 필수 필드라 반드시 주입해야 한다. 도메인은 persistent 의 ACM/ALB 도메인과 일치시킨다.
+    DISCORD_REDIRECT_URI = "https://${local.persistent.domain_name}/api/v1/auth/discord/callback"
 
     # DB (IAM 인증이라 password 미저장)
-    DB_HOST       = aws_db_instance.main.address
-    DB_PORT       = tostring(aws_db_instance.main.port)
-    DB_NAME       = var.db_name
-    DB_IAM_USER   = local.persistent.db_iam_user
+    DB_HOST     = aws_db_instance.main.address
+    DB_PORT     = tostring(aws_db_instance.main.port)
+    DB_NAME     = var.db_name
+    DB_IAM_USER = local.persistent.db_iam_user
 
     # Redis (IAM 인증)
     REDIS_HOST       = local.cache_endpoint
     REDIS_PORT       = tostring(aws_elasticache_serverless_cache.main.endpoint[0].port)
     REDIS_IAM_USER   = local.persistent.redis_iam_user
     REDIS_CACHE_NAME = aws_elasticache_serverless_cache.main.name
-  }
-
-  app_secrets = {
-    JWT_SECRET                 = var.jwt_secret
-    DISCORD_CLIENT_ID          = var.discord_client_id
-    DISCORD_CLIENT_SECRET      = var.discord_client_secret
-    DISCORD_BOT_TOKEN          = var.discord_bot_token
-    SUBWAY_API_KEY             = var.subway_api_key
-    NAVER_SEARCH_CLIENT_ID     = var.naver_search_client_id
-    NAVER_SEARCH_CLIENT_SECRET = var.naver_search_client_secret
-    LIBRARY_SEAT_URL           = var.library_seat_url
-    ADMIN_DISCORD_IDS          = var.admin_discord_ids
   }
 }
 
@@ -45,23 +46,4 @@ resource "aws_ssm_parameter" "app_config" {
   value = each.value
 
   tags = { Name = "/${var.project}/app/${each.key}" }
-}
-
-resource "aws_ssm_parameter" "app_secrets" {
-  for_each = local.app_secrets
-
-  name  = "/${var.project}/app/${each.key}"
-  type  = "SecureString"
-  value = each.value == "" ? "__empty__" : each.value
-
-  tags = { Name = "/${var.project}/app/${each.key}" }
-}
-
-# GHCR PAT — EC2 가 docker login 시 사용. 별도 네임스페이스.
-resource "aws_ssm_parameter" "ghcr_pat" {
-  name  = "/${var.project}/ghcr/pat"
-  type  = "SecureString"
-  value = var.ghcr_pat
-
-  tags = { Name = "/${var.project}/ghcr/pat" }
 }

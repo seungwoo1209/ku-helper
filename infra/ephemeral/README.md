@@ -33,9 +33,9 @@ terraform init \
 
 terraform apply \
   -var "tfstate_bucket=ku-helper-tfstate-${ACCOUNT_ID}" \
-  -var "developer_ip_cidr=$(curl -s ifconfig.me)/32" \
-  -var "jwt_secret=..." -var "discord_client_id=..." -var "discord_client_secret=..." \
-  -var "discord_bot_token=..." -var "ghcr_pat=..."
+  -var "developer_ip_cidr=$(curl -s ifconfig.me)/32"
+# 시크릿은 더 이상 terraform 변수로 받지 않는다.
+# scripts/bootstrap-secrets-to-parameter-store.sh 로 SSM 에 직접 등록한다(infra/roadmap.md 참고).
 
 # teardown
 terraform destroy ...   # RDS final snapshot 자동 생성

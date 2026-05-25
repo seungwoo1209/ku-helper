@@ -128,7 +128,8 @@ jobs:
           ssh -i ~/.ssh/ku-helper.pem -o StrictHostKeyChecking=accept-new ec2-user@${APP_IP} <<EOF
           set -euo pipefail
           cd /opt/ku-helper
-          # SSM Parameter Store 에 새 이미지 태그를 기록할지는 별 작업. 현재는 main 태그 pull.
+          # SSM 최신 시크릿으로 app.env 와 GitHub Container Registry 로그인 갱신
+          sudo /opt/ku-helper/refresh-env.sh
           docker compose pull backend
           docker compose up -d backend
           EOF
