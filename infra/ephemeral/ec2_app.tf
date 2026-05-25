@@ -47,8 +47,9 @@ resource "aws_instance" "app" {
     role = "app"
   }
 
-  # 시크릿 파라미터(app_secrets, ghcr_pat)는 persistent 모듈에 있고 ephemeral 보다 먼저
-  # apply 되므로 cross-state depends_on 은 필요 없다.
+  # 시크릿 파라미터(/ku-helper/app/* 시크릿, /ku-helper/ghcr/pat)는 terraform 이 아니라
+  # bootstrap-secrets 스크립트가 생성하므로 여기서 depends_on 대상이 아니다. EC2 부팅 시점에
+  # 파라미터가 존재하도록 스크립트를 먼저 실행해야 한다.
   depends_on = [
     aws_db_instance.main,
     aws_elasticache_serverless_cache.main,

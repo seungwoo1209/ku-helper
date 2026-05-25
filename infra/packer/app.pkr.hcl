@@ -33,7 +33,7 @@ source "amazon-ebs" "app" {
   ssh_username  = "ec2-user"
 
   ami_name        = "${var.ami_name_prefix}-{{timestamp}}"
-  ami_description = "ku-helper app/bastion AMI — AL2023 + docker + compose v2 + cwagent + awscli v2"
+  ami_description = "ku-helper app/bastion AMI - AL2023 + docker + compose v2 + cwagent + awscli v2"
 
   source_ami_filter {
     filters = {
