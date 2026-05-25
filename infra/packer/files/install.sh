@@ -13,6 +13,7 @@ usermod -aG docker ec2-user
 
 install -d -m 0755 /opt/ku-helper /etc/ku-helper
 install -m 0644 /tmp/docker-compose.yml /opt/ku-helper/docker-compose.yml
+install -m 0755 /tmp/refresh-env.sh /opt/ku-helper/refresh-env.sh
 
 install -d -m 0755 /opt/aws/amazon-cloudwatch-agent/etc
 install -m 0644 /tmp/cloudwatch-agent.json /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
@@ -48,4 +49,4 @@ systemctl daemon-reload
 systemctl enable ku-helper-app.service
 
 dnf clean all
-rm -rf /var/cache/dnf /tmp/docker-compose.yml /tmp/cloudwatch-agent.json
+rm -rf /var/cache/dnf /tmp/docker-compose.yml /tmp/cloudwatch-agent.json /tmp/refresh-env.sh

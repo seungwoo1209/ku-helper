@@ -68,11 +68,6 @@ jobs:
         env:
           TF_VAR_tfstate_bucket: ${{ env.TFSTATE_BUCKET_PREFIX }}-${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}
           TF_VAR_developer_ip_cidr: "0.0.0.0/32"
-          TF_VAR_jwt_secret: "destroy"
-          TF_VAR_discord_client_id: "destroy"
-          TF_VAR_discord_client_secret: "destroy"
-          TF_VAR_discord_bot_token: "destroy"
-          TF_VAR_ghcr_pat: "destroy"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           terraform init \

@@ -78,6 +78,11 @@ build {
     destination = "/tmp/docker-compose.yml"
   }
 
+  provisioner "file" {
+    source      = "files/refresh-env.sh"
+    destination = "/tmp/refresh-env.sh"
+  }
+
   provisioner "shell" {
     script          = "files/install.sh"
     execute_command = "{{ .Vars }} sudo -E -S bash '{{ .Path }}'"
