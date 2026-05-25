@@ -84,12 +84,19 @@ jobs:
             echo "::error::infra/ephemeral 의 출력값이 비어 있다. spin-up 워크플로를 먼저 실행하라."
             exit 1
           fi
-          APP_IP=$(terraform output -raw app_public_ip 2>/dev/null || true)
-          if [ -z "$APP_IP" ]; then
-            echo "::error::terraform output 'app_public_ip' 가 비어 있다. ephemeral apply 결과를 확인하라."
-            exit 1
-          fi
-          echo "app_ip=$APP_IP" >>"$GITHUB_OUTPUT"
+          declare -A out
+          for k in app_public_ip bastion_public_ip; do
+            v=$(terraform output -raw "$k" 2>/dev/null || true)
+            if [ -z "$v" ]; then
+              echo "::error::terraform output '$k' 가 비어 있다. ephemeral apply 결과를 확인하라."
+              exit 1
+            fi
+            out[$k]="$v"
+          done
+          {
+            echo "app_ip=${out[app_public_ip]}"
+            echo "bastion_ip=${out[bastion_public_ip]}"
+          } >>"$GITHUB_OUTPUT"
           # SSH private key 는 terraform state 의 sensitive output 으로만 보관. 워크플로 로그에
           # 노출되지 않도록 GITHUB_OUTPUT 에 넣지 않고 다음 step 으로 파일로 전달한다.
           terraform output -raw ec2_ssh_private_key_pem >"$RUNNER_TEMP/ku-helper.pem"
@@ -100,13 +107,20 @@ jobs:
           install -d -m 0700 ~/.ssh
           install -m 0600 "$RUNNER_TEMP/ku-helper.pem" ~/.ssh/ku-helper.pem
           rm -f "$RUNNER_TEMP/ku-helper.pem"
+          ssh-keyscan -H ${{ steps.tf.outputs.bastion_ip }} >>~/.ssh/known_hosts 2>/dev/null || true
           ssh-keyscan -H ${{ steps.tf.outputs.app_ip }} >>~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Rollout bot container on app EC2
         env:
           APP_IP: ${{ steps.tf.outputs.app_ip }}
+          BASTION_IP: ${{ steps.tf.outputs.bastion_ip }}
         run: |
-          ssh -i ~/.ssh/ku-helper.pem -o StrictHostKeyChecking=accept-new ec2-user@${APP_IP} <<EOF
+          # app EC2 의 22 는 bastion SG 만 허용한다. runner 에서 직접 접속 불가하므로
+          # bastion ProxyJump 경유로 SSH 한다.
+          ssh -J ec2-user@${BASTION_IP} \
+              -i ~/.ssh/ku-helper.pem \
+              -o StrictHostKeyChecking=accept-new \
+              ec2-user@${APP_IP} <<EOF
           set -euo pipefail
           cd /opt/ku-helper
           # SSM 최신 시크릿으로 app.env 와 GitHub Container Registry 로그인 갱신

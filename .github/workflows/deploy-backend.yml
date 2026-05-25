@@ -156,9 +156,15 @@ jobs:
       - name: Rollout backend container on app EC2
         env:
           APP_IP: ${{ steps.tf.outputs.app_ip }}
+          BASTION_IP: ${{ steps.tf.outputs.bastion_ip }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
-          ssh -i ~/.ssh/ku-helper.pem -o StrictHostKeyChecking=accept-new ec2-user@${APP_IP} <<EOF
+          # app EC2 의 22 는 bastion SG 만 허용한다. runner 에서 직접 접속 불가하므로
+          # bastion ProxyJump 경유로 SSH 한다.
+          ssh -J ec2-user@${BASTION_IP} \
+              -i ~/.ssh/ku-helper.pem \
+              -o StrictHostKeyChecking=accept-new \
+              ec2-user@${APP_IP} <<EOF
           set -euo pipefail
           cd /opt/ku-helper
           # SSM 최신 시크릿으로 app.env 와 GitHub Container Registry 로그인 갱신
