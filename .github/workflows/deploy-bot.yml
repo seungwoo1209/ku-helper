@@ -1,0 +1,99 @@
+name: deploy-bot
+
+# bot 컨테이너 이미지 빌드·푸시 → app EC2 rollout. 마이그레이션 단계 없음(봇은 스키마 변경 권한 없음).
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  AWS_REGION: ap-northeast-2
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/ku-helper-bot
+  TFSTATE_BUCKET_PREFIX: ku-helper-tfstate
+  TFLOCK_TABLE: ku-helper-tflock
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        run: |
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "image_tag=${short_sha}" >>"$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: ./bot
+          file: ./bot/Dockerfile
+          push: true
+          tags: |
+            ${{ env.GHCR_IMAGE }}:main
+            ${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  rollout:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+
+      - name: Resolve infra outputs
+        id: tf
+        working-directory: infra/ephemeral
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          terraform init \
+            -backend-config="bucket=${TFSTATE_BUCKET_PREFIX}-${ACCOUNT_ID}" \
+            -backend-config="dynamodb_table=${TFLOCK_TABLE}" \
+            -backend-config="region=${AWS_REGION}"
+          echo "app_ip=$(terraform output -raw app_public_ip)" >>"$GITHUB_OUTPUT"
+
+      - name: Write SSH key
+        run: |
+          install -d -m 0700 ~/.ssh
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" >~/.ssh/ku-helper.pem
+          chmod 0600 ~/.ssh/ku-helper.pem
+          ssh-keyscan -H ${{ steps.tf.outputs.app_ip }} >>~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Rollout bot container on app EC2
+        env:
+          APP_IP: ${{ steps.tf.outputs.app_ip }}
+        run: |
+          ssh -i ~/.ssh/ku-helper.pem -o StrictHostKeyChecking=accept-new ec2-user@${APP_IP} <<EOF
+          set -euo pipefail
+          cd /opt/ku-helper
+          docker compose pull bot
+          docker compose up -d bot
+          EOF

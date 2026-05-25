@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-22 — §E F-22 single-trigger admin DM 완료(브랜치 `feat/roles`, PR #13 + 후속 가드 제거 커밋). 원본 요구사항 직역(임계값·카운터·쿨다운 없음). 노이즈 가드 재도입은 실 운영 측정 후 §E-2 항목으로 대기. 이전: 크롤러 4종 Redis TTL 캐시 이전 완료(브랜치 `feat/caching`). 모듈 dict 캐시 + asyncio.Lock 폐기. `JobContext.redis_client` 가 Optional → required 로 승격(`main.py` 가 redis ping 실패 시 부팅 차단). 신규 키: `subway:arrivals:{station_name}` TTL 30s, `lunch:menu:{iso_week}` TTL 7d, `restaurants:pool:{YYYY-MM-DD}` TTL 24h, `library:rooms:{sha1(url)[:12]}` TTL 15s. 4개 크롤러 모두 `__init__(http_client, settings, redis)` 시그니처로 통일 + dataclass↔JSON 직렬화 헬퍼 `_deserialize_*` 모듈 내부 전용. SETEX race 는 같은 값 덮어쓰기라 무해 → 분산락 미도입(KISS). 이전: F-06 TRANSIT 단발 도착 알림 종단 완료(백엔드 커밋 `dcb5ab2`). TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
+마지막 갱신: 2026-05-25 — RDS·ElastiCache IAM DB 인증 적용(issue #34, 브랜치 `infra/aws-rebuild`). Settings 에 `use_iam_auth` 분기 + `aws_auth.py` 신규(`generate_rds_iam_token` + SigV4 ElastiCache 토큰) + `database.py` `do_connect` 이벤트 + `redis.py` `CredentialProvider`. 기존 dev/test compose 동작 그대로(USE_IAM_AUTH=false 기본). 단위 테스트 미작성(후속 §0-4). `pyproject.toml` boto3>=1.34. 이전: §E F-22 single-trigger admin DM 완료(브랜치 `feat/roles`, PR #13 + 후속 가드 제거 커밋). 원본 요구사항 직역(임계값·카운터·쿨다운 없음). 노이즈 가드 재도입은 실 운영 측정 후 §E-2 항목으로 대기. 이전: 크롤러 4종 Redis TTL 캐시 이전 완료(브랜치 `feat/caching`). 모듈 dict 캐시 + asyncio.Lock 폐기. `JobContext.redis_client` 가 Optional → required 로 승격(`main.py` 가 redis ping 실패 시 부팅 차단). 신규 키: `subway:arrivals:{station_name}` TTL 30s, `lunch:menu:{iso_week}` TTL 7d, `restaurants:pool:{YYYY-MM-DD}` TTL 24h, `library:rooms:{sha1(url)[:12]}` TTL 15s. 4개 크롤러 모두 `__init__(http_client, settings, redis)` 시그니처로 통일 + dataclass↔JSON 직렬화 헬퍼 `_deserialize_*` 모듈 내부 전용. SETEX race 는 같은 값 덮어쓰기라 무해 → 분산락 미도입(KISS). 이전: F-06 TRANSIT 단발 도착 알림 종단 완료(백엔드 커밋 `dcb5ab2`). TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
 
 ## 진행 상황 스냅샷
 
@@ -62,6 +62,11 @@
 - `app/db/models.py`: `User`/`Notification`/`NotificationHistory` + enum 3종 작성됨.
 - `app/notifications/repository.py`: `list_active_subscriptions(type_)` + `get_user_status(user_id)`. (현재 시그니처는 `now` 인자 없이 호출 — 시간 의존 평가는 worker 가 담당하도록 위임.)
 - alembic 호환성 통합 테스트 1건: **미작성**. 일반 `pytest` 는 `Base.metadata.create_all` 사용 → 백엔드 마이그레이션 회귀를 못 잡음. §G-3 CI 와 묶어 보강 권장.
+
+### 0-4. RDS·ElastiCache IAM 인증 적용 (issue #34) — 부분 완료
+- 완료: aws_auth.py + Settings 분기 + database.py do_connect + redis.py CredentialProvider. backend 와 동일 패턴.
+- 잔여: 단위 테스트 미작성. 후보 — (1) Settings validator 분기 2건, (2) generate_rds_iam_token mock 호출 검증, (3) _ElastiCacheIamCredentialProvider.get_credentials 매 호출 새 토큰 발급 검증.
+- 운영 진입 조건은 backend roadmap §C-3 참고.
 
 ## §A. 발송 인프라
 

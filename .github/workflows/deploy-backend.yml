@@ -1,0 +1,147 @@
+name: deploy-backend
+
+# backend 컨테이너 이미지 빌드·푸시 → bastion 경유 alembic 마이그레이션 → app EC2 rollout.
+# 단독 실행도 가능하고 deploy-backend-bot-startup.yml / spin-up.yml 에서 workflow_call 로도 호출.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  AWS_REGION: ap-northeast-2
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/ku-helper-backend
+  TFSTATE_BUCKET_PREFIX: ku-helper-tfstate
+  TFLOCK_TABLE: ku-helper-tflock
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        run: |
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "image_tag=${short_sha}" >>"$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.GHCR_IMAGE }}:main
+            ${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  migrate-and-rollout:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: astral-sh/setup-uv@v3
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+
+      - name: Resolve infra outputs
+        id: tf
+        working-directory: infra/ephemeral
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          terraform init \
+            -backend-config="bucket=${TFSTATE_BUCKET_PREFIX}-${ACCOUNT_ID}" \
+            -backend-config="dynamodb_table=${TFLOCK_TABLE}" \
+            -backend-config="region=${AWS_REGION}"
+          {
+            echo "app_ip=$(terraform output -raw app_public_ip)"
+            echo "bastion_ip=$(terraform output -raw bastion_public_ip)"
+            echo "rds_endpoint=$(terraform output -raw rds_endpoint)"
+            echo "rds_port=$(terraform output -raw rds_port)"
+            echo "rds_master_secret_arn=$(terraform output -raw rds_master_secret_arn)"
+            echo "api_url=$(terraform output -raw api_url)"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Write SSH key
+        run: |
+          install -d -m 0700 ~/.ssh
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" >~/.ssh/ku-helper.pem
+          chmod 0600 ~/.ssh/ku-helper.pem
+          ssh-keyscan -H ${{ steps.tf.outputs.bastion_ip }} >>~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ steps.tf.outputs.app_ip }} >>~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Alembic migrate (via bastion tunnel)
+        working-directory: backend
+        env:
+          BASTION_IP: ${{ steps.tf.outputs.bastion_ip }}
+          RDS_HOST: ${{ steps.tf.outputs.rds_endpoint }}
+          RDS_PORT: ${{ steps.tf.outputs.rds_port }}
+          RDS_MASTER_SECRET_ARN: ${{ steps.tf.outputs.rds_master_secret_arn }}
+        run: |
+          uv sync --no-dev
+          # bastion 경유 SSH 터널 — 로컬 15432 → RDS 5432
+          ssh -i ~/.ssh/ku-helper.pem -o StrictHostKeyChecking=accept-new \
+              -f -N -L 15432:${RDS_HOST}:${RDS_PORT} \
+              ec2-user@${BASTION_IP}
+          # master 패스워드 fetch (마이그레이션은 IAM user 가 아닌 master 권한으로)
+          MASTER_PW=$(aws secretsmanager get-secret-value \
+            --secret-id "$RDS_MASTER_SECRET_ARN" \
+            --query SecretString --output text | python3 -c 'import sys,json; print(json.load(sys.stdin)["password"])')
+          export ALEMBIC_DATABASE_URL="postgresql+asyncpg://postgres:${MASTER_PW}@localhost:15432/ku_helper"
+          uv run alembic upgrade head
+          # tunnel 정리
+          pkill -f "ssh.*15432:${RDS_HOST}" || true
+
+      - name: Rollout backend container on app EC2
+        env:
+          APP_IP: ${{ steps.tf.outputs.app_ip }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          ssh -i ~/.ssh/ku-helper.pem -o StrictHostKeyChecking=accept-new ec2-user@${APP_IP} <<EOF
+          set -euo pipefail
+          cd /opt/ku-helper
+          # SSM Parameter Store 에 새 이미지 태그를 기록할지는 별 작업. 현재는 main 태그 pull.
+          docker compose pull backend
+          docker compose up -d backend
+          EOF
+
+      - name: Health check
+        env:
+          API_URL: ${{ steps.tf.outputs.api_url }}
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "${API_URL}/health" >/dev/null; then
+              echo "backend healthy"; exit 0
+            fi
+            sleep 5
+          done
+          echo "backend health check timed out" >&2
+          exit 1
