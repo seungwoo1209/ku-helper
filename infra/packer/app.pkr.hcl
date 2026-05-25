@@ -18,7 +18,7 @@ variable "aws_region" {
 variable "ami_name_prefix" {
   type        = string
   default     = "ku-helper-app"
-  description = "persistent 모듈의 aws_ami data source 가 `${prefix}-*` 으로 lookup."
+  description = "persistent 모듈의 aws_ami data source 가 <prefix>-* 으로 lookup."
 }
 
 variable "instance_type" {
