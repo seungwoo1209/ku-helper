@@ -262,9 +262,12 @@ jobs:
           mkdir -p ~/.ssh && chmod 0700 ~/.ssh
           ssh-keyscan -H "$BASTION_IP" >>~/.ssh/known_hosts 2>/dev/null || true
           ssh-keyscan -H "$APP_IP" >>~/.ssh/known_hosts 2>/dev/null || true
-          # app EC2 의 22 는 bastion SG 만 허용. bastion ProxyJump 경유.
-          ssh -J ec2-user@${BASTION_IP} \
+          # app EC2 의 22 는 bastion SG 만 허용. bastion 을 점프 호스트로 경유한다.
+          # ssh -J 단축형은 명령행 -i 키가 최종 목적지에 일관되게 전달되지 않을 수 있어,
+          # ProxyCommand 로 두 홉 모두에 키를 명시한다.
+          ssh -o ProxyCommand="ssh -i $RUNNER_TEMP/ku-helper.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ec2-user@${BASTION_IP}" \
               -i $RUNNER_TEMP/ku-helper.pem \
+              -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=accept-new \
               ec2-user@${APP_IP} <<EOF
           set -euo pipefail

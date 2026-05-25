@@ -116,9 +116,11 @@ jobs:
           BASTION_IP: ${{ steps.tf.outputs.bastion_ip }}
         run: |
           # app EC2 의 22 는 bastion SG 만 허용한다. runner 에서 직접 접속 불가하므로
-          # bastion ProxyJump 경유로 SSH 한다.
-          ssh -J ec2-user@${BASTION_IP} \
+          # bastion 을 점프 호스트로 경유한다. ssh -J 단축형은 명령행 -i 키가 최종 목적지에
+          # 일관되게 전달되지 않을 수 있어, ProxyCommand 로 두 홉 모두에 키를 명시한다.
+          ssh -o ProxyCommand="ssh -i ~/.ssh/ku-helper.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ec2-user@${BASTION_IP}" \
               -i ~/.ssh/ku-helper.pem \
+              -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=accept-new \
               ec2-user@${APP_IP} <<EOF
           set -euo pipefail
