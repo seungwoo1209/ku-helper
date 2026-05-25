@@ -19,6 +19,10 @@ locals {
     # GitHub Container Registry 소유자 (refresh-env.sh 가 docker login 시 사용)
     GHCR_OWNER = var.github_owner
 
+    # Discord OAuth 콜백 URL. backend config 의 discord_redirect_uri 는 기본값이 없는
+    # 필수 필드라 반드시 주입해야 한다. 도메인은 persistent 의 ACM/ALB 도메인과 일치시킨다.
+    DISCORD_REDIRECT_URI = "https://${local.persistent.domain_name}/api/v1/auth/discord/callback"
+
     # DB (IAM 인증이라 password 미저장)
     DB_HOST     = aws_db_instance.main.address
     DB_PORT     = tostring(aws_db_instance.main.port)
