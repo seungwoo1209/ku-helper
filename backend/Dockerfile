@@ -15,6 +15,8 @@ RUN uv sync --no-dev --frozen || uv sync --no-dev
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
+# router.py 가 import 시점에 docs/endpoints/*.md 를 OpenAPI description 으로 읽으므로 포함한다.
+COPY docs ./docs
 
 
 FROM python:3.12-slim AS runtime
