@@ -76,25 +76,47 @@ jobs:
         id: tf
         working-directory: infra/ephemeral
         run: |
+          set -euo pipefail
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           terraform init \
             -backend-config="bucket=${TFSTATE_BUCKET_PREFIX}-${ACCOUNT_ID}" \
             -backend-config="dynamodb_table=${TFLOCK_TABLE}" \
             -backend-config="region=${AWS_REGION}"
+          # ephemeral 인프라가 아직 안 올라온 경우 (spin-up 미실행) terraform output 이
+          # 'Warning: No outputs found' 를 stdout 으로 뱉어 GITHUB_OUTPUT 형식이 깨진다.
+          # 빠르게 명확한 에러로 실패하도록 가드한다.
+          if [ "$(terraform output -json | jq -r 'length')" = "0" ]; then
+            echo "::error::infra/ephemeral 의 출력값이 비어 있다. spin-up 워크플로를 먼저 실행하라."
+            exit 1
+          fi
+          # 각 출력값을 한 번에 변수로 받아 빈 값이면 명확히 실패시킨다.
+          declare -A out
+          for k in app_public_ip bastion_public_ip rds_endpoint rds_port rds_master_secret_arn api_url; do
+            v=$(terraform output -raw "$k" 2>/dev/null || true)
+            if [ -z "$v" ]; then
+              echo "::error::terraform output '$k' 가 비어 있다. ephemeral apply 결과를 확인하라."
+              exit 1
+            fi
+            out[$k]="$v"
+          done
           {
-            echo "app_ip=$(terraform output -raw app_public_ip)"
-            echo "bastion_ip=$(terraform output -raw bastion_public_ip)"
-            echo "rds_endpoint=$(terraform output -raw rds_endpoint)"
-            echo "rds_port=$(terraform output -raw rds_port)"
-            echo "rds_master_secret_arn=$(terraform output -raw rds_master_secret_arn)"
-            echo "api_url=$(terraform output -raw api_url)"
+            echo "app_ip=${out[app_public_ip]}"
+            echo "bastion_ip=${out[bastion_public_ip]}"
+            echo "rds_endpoint=${out[rds_endpoint]}"
+            echo "rds_port=${out[rds_port]}"
+            echo "rds_master_secret_arn=${out[rds_master_secret_arn]}"
+            echo "api_url=${out[api_url]}"
           } >>"$GITHUB_OUTPUT"
+          # SSH private key 는 terraform state 의 sensitive output 으로만 보관. 워크플로 로그에
+          # 노출되지 않도록 GITHUB_OUTPUT 에 넣지 않고 다음 step 으로 파일로 전달한다.
+          terraform output -raw ec2_ssh_private_key_pem >"$RUNNER_TEMP/ku-helper.pem"
+          chmod 0600 "$RUNNER_TEMP/ku-helper.pem"
 
-      - name: Write SSH key
+      - name: Prepare SSH key
         run: |
           install -d -m 0700 ~/.ssh
-          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" >~/.ssh/ku-helper.pem
-          chmod 0600 ~/.ssh/ku-helper.pem
+          install -m 0600 "$RUNNER_TEMP/ku-helper.pem" ~/.ssh/ku-helper.pem
+          rm -f "$RUNNER_TEMP/ku-helper.pem"
           ssh-keyscan -H ${{ steps.tf.outputs.bastion_ip }} >>~/.ssh/known_hosts 2>/dev/null || true
           ssh-keyscan -H ${{ steps.tf.outputs.app_ip }} >>~/.ssh/known_hosts 2>/dev/null || true
 

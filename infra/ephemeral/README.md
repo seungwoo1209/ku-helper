@@ -10,7 +10,7 @@ spin-up / teardown 사이클로 함께 생성/삭제되는 모든 리소스. 한
 - EC2 bastion (t3.micro, public, SSH 22 from `developer_ip_cidr` 전용)
 - RDS PG 16 db.t4g.micro (private, IAM auth, 별도 파라미터 그룹, final snapshot)
 - Valkey serverless 최소(1 GB / 1000 ECPU) + IAM user group
-- TLS keypair + GitHub Actions Secret `EC2_SSH_PRIVATE_KEY`
+- TLS keypair (private key 는 terraform output `ec2_ssh_private_key_pem` (sensitive) 으로만 노출)
 - SSM Parameter `/ku-helper/app/*` + `/ku-helper/ghcr/pat`
 - Secrets Manager `ku-helper/rds/master` (부트스트랩 전용)
 
