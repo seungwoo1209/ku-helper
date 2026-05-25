@@ -11,7 +11,6 @@ resource "aws_elasticache_user" "default" {
   user_name     = "default"
   engine        = "valkey"
   access_string = "off ~keys* -@all"
-  passwords     = [random_password.valkey_default.result]
 
   authentication_mode {
     type      = "password"
