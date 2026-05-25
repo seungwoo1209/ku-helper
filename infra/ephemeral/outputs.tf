@@ -18,6 +18,11 @@ output "app_public_ip" {
   value       = aws_instance.app.public_ip
 }
 
+output "app_private_ip" {
+  description = "app EC2 private IP — bastion 점프 경유 SSH 최종 홉. app SG 22 가 bastion SG 참조라 private IP 로만 도달 가능."
+  value       = aws_instance.app.private_ip
+}
+
 output "bastion_public_ip" {
   description = "개발자가 SSH 터널 / IAM 인증 SQL 실행에 사용."
   value       = aws_instance.bastion.public_ip
