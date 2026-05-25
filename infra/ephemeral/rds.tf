@@ -9,7 +9,7 @@ resource "random_password" "db_master" {
 # Secrets Manager 에 저장하여 워크플로 / bastion 에서 fetch.
 resource "aws_secretsmanager_secret" "db_master" {
   name                    = "${var.project}/rds/master"
-  description             = "RDS master password — bootstrap SQL 실행 전용. 일상 접속은 IAM auth 사용."
+  description             = "RDS master password - bootstrap SQL 실행 전용. 일상 접속은 IAM auth 사용."
   recovery_window_in_days = 0
 }
 

@@ -57,5 +57,5 @@ resource "aws_elasticache_serverless_cache" "main" {
   security_group_ids = [aws_security_group.valkey.id]
   user_group_id      = aws_elasticache_user_group.app.user_group_id
 
-  description = "ku-helper Valkey serverless — minimal cap"
+  description = "ku-helper Valkey serverless - minimal cap"
 }
