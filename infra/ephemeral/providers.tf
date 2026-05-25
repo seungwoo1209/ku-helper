@@ -15,10 +15,6 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.5"
     }
-    github = {
-      source  = "integrations/github"
-      version = "~> 6.0"
-    }
   }
 }
 
@@ -44,6 +40,3 @@ provider "aws" {
   }
 }
 
-provider "github" {
-  owner = var.github_owner
-}

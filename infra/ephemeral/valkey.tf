@@ -1,16 +1,27 @@
+# default 사용자는 user_group 에 반드시 포함되어야 한다. Valkey 는 no-password-required 를
+# 거부하므로 password 모드로 만들되 access_string 으로 모든 동작을 차단한다. 패스워드는
+# random 으로 생성하고 어디에도 노출하지 않는다(사용 의도 없음).
+resource "random_password" "valkey_default" {
+  length  = 32
+  special = false
+}
+
 resource "aws_elasticache_user" "default" {
   user_id       = "${var.project}-default-disabled"
   user_name     = "default"
   engine        = "valkey"
   access_string = "off ~keys* -@all"
+  passwords     = [random_password.valkey_default.result]
 
   authentication_mode {
-    type = "no-password-required"
+    type      = "password"
+    passwords = [random_password.valkey_default.result]
   }
 }
 
+# IAM 인증 사용자는 user_id 와 user_name 이 동일해야 한다(ElastiCache 제약).
 resource "aws_elasticache_user" "app" {
-  user_id       = "${var.project}-app-user"
+  user_id       = local.persistent.redis_iam_user
   user_name     = local.persistent.redis_iam_user
   engine        = "valkey"
   access_string = "on ~* +@all"
