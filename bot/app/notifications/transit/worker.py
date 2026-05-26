@@ -69,6 +69,10 @@ async def run_transit_job(ctx: JobContext) -> None:
     now_kst_time = now.astimezone(_DISPLAY_TIMEZONE).time()
     subway_client = SubwayClient(ctx.http_client, ctx.settings, redis=ctx.redis_client)
 
+    # 틱 내 subway 실패 여부를 추적해 admin alert 를 틱당 1회만 발송한다.
+    # 여러 구독이 동일 장애로 실패해도 admin DM 폭주를 방지한다 (roadmap §E-2 참고).
+    _subway_fail_exc: SubwayApiUnavailable | BotException | None = None
+
     try:
         async with ctx.session_maker() as session:
             repo = NotificationRepository(session)
@@ -88,15 +92,30 @@ async def run_transit_job(ctx: JobContext) -> None:
                 if mode == "recurring":
                     pass  # 아래 기존 recurring 로직 그대로 진행
                 elif mode == "arrival":
-                    await _process_arrival_subscription(
-                        ctx=ctx,
-                        notification=notification,
-                        user=user,
-                        arrivals_cache=arrivals_cache,
-                        subway_client=subway_client,
-                        now=now,
-                        now_kst_time=now_kst_time,
-                    )
+                    try:
+                        await _process_arrival_subscription(
+                            ctx=ctx,
+                            notification=notification,
+                            user=user,
+                            arrivals_cache=arrivals_cache,
+                            subway_client=subway_client,
+                            now=now,
+                            now_kst_time=now_kst_time,
+                        )
+                    except SubwayApiUnavailable as exc:
+                        _logger.warning(
+                            "transit_subway_api_unavailable",
+                            code=exc.code,
+                            notification_id=notification.id,
+                        )
+                        _subway_fail_exc = exc
+                    except BotException as exc:
+                        _logger.warning(
+                            "transit_bot_exception",
+                            code=exc.code,
+                            notification_id=notification.id,
+                        )
+                        _subway_fail_exc = exc
                     continue
                 else:
                     _logger.debug(
@@ -106,94 +125,113 @@ async def run_transit_job(ctx: JobContext) -> None:
                     )
                     continue
 
-                # 윈도우(start_time/end_time) 검사. 사용자가 KST 기준으로 입력한 값과 비교.
-                start_time = _parse_config_time(cfg.get("start_time"))
-                end_time = _parse_config_time(cfg.get("end_time"))
-                if start_time is not None and now_kst_time < start_time:
-                    _logger.debug(
-                        "transit_skip_before_window",
-                        notification_id=notification.id,
-                        now_kst_time=now_kst_time.isoformat(),
-                        start_time=start_time.isoformat(),
+                # 구독별로 crawler 실패를 격리한다. 한 구독의 실패가 나머지를 막지 않는다.
+                try:
+                    # 윈도우(start_time/end_time) 검사. 사용자가 KST 기준으로 입력한 값과 비교.
+                    start_time = _parse_config_time(cfg.get("start_time"))
+                    end_time = _parse_config_time(cfg.get("end_time"))
+                    if start_time is not None and now_kst_time < start_time:
+                        _logger.debug(
+                            "transit_skip_before_window",
+                            notification_id=notification.id,
+                            now_kst_time=now_kst_time.isoformat(),
+                            start_time=start_time.isoformat(),
+                        )
+                        continue
+                    if end_time is not None and now_kst_time > end_time:
+                        _logger.debug(
+                            "transit_skip_after_window",
+                            notification_id=notification.id,
+                            now_kst_time=now_kst_time.isoformat(),
+                            end_time=end_time.isoformat(),
+                        )
+                        continue
+
+                    # in_flight 체크: 이미 큐에 적재돼 처리 중인 구독 skip.
+                    if notification.id in ctx.in_flight_notification_ids:
+                        _logger.debug(
+                            "transit_skip_in_flight", notification_id=notification.id
+                        )
+                        continue
+
+                    # 마지막 발송 시각 체크 — repeat_interval_minutes 미만이면 skip.
+                    repeat_interval_minutes: int = int(
+                        cfg.get("repeat_interval_minutes", 0)
                     )
-                    continue
-                if end_time is not None and now_kst_time > end_time:
-                    _logger.debug(
-                        "transit_skip_after_window",
-                        notification_id=notification.id,
-                        now_kst_time=now_kst_time.isoformat(),
-                        end_time=end_time.isoformat(),
-                    )
-                    continue
+                    if repeat_interval_minutes > 0:
+                        last_sent_at = await history_repo.get_last_sent_at(
+                            notification.id, NotificationDeliveryStatus.SUCCESS
+                        )
+                        if last_sent_at is not None:
+                            elapsed_seconds = (now - last_sent_at).total_seconds()
+                            if elapsed_seconds < repeat_interval_minutes * 60:
+                                _logger.debug(
+                                    "transit_skip_interval_not_elapsed",
+                                    notification_id=notification.id,
+                                    elapsed_seconds=elapsed_seconds,
+                                    interval_seconds=repeat_interval_minutes * 60,
+                                )
+                                continue
 
-                # in_flight 체크: 이미 큐에 적재돼 처리 중인 구독 skip.
-                if notification.id in ctx.in_flight_notification_ids:
-                    _logger.debug(
-                        "transit_skip_in_flight", notification_id=notification.id
-                    )
-                    continue
+                    # SubwayClient 호출 — 동일 역 이름은 캐시 사용.
+                    station_name: str = cfg.get("station_name", "")
+                    line: str = cfg.get("line", "")
 
-                # 마지막 발송 시각 체크 — repeat_interval_minutes 미만이면 skip.
-                repeat_interval_minutes: int = int(
-                    cfg.get("repeat_interval_minutes", 0)
-                )
-                if repeat_interval_minutes > 0:
-                    last_sent_at = await history_repo.get_last_sent_at(
-                        notification.id, NotificationDeliveryStatus.SUCCESS
-                    )
-                    if last_sent_at is not None:
-                        elapsed_seconds = (now - last_sent_at).total_seconds()
-                        if elapsed_seconds < repeat_interval_minutes * 60:
-                            _logger.debug(
-                                "transit_skip_interval_not_elapsed",
-                                notification_id=notification.id,
-                                elapsed_seconds=elapsed_seconds,
-                                interval_seconds=repeat_interval_minutes * 60,
-                            )
-                            continue
+                    if station_name not in arrivals_cache:
+                        arrivals_cache[
+                            station_name
+                        ] = await subway_client.fetch_arrivals(station_name)
 
-                # SubwayClient 호출 — 동일 역 이름은 캐시 사용.
-                station_name: str = cfg.get("station_name", "")
-                line: str = cfg.get("line", "")
+                    raw_arrivals = arrivals_cache[station_name]
+                    arrivals = raw_arrivals if isinstance(raw_arrivals, list) else []
+                    typed_arrivals: list[SubwayArrival] = [
+                        a for a in arrivals if isinstance(a, SubwayArrival)
+                    ]
 
-                if station_name not in arrivals_cache:
-                    arrivals_cache[station_name] = await subway_client.fetch_arrivals(
-                        station_name
+                    embed, payload = build_transit_recurring_embed(
+                        station_name=station_name,
+                        line=line,
+                        arrivals=typed_arrivals,
+                        now=now,
                     )
 
-                raw_arrivals = arrivals_cache[station_name]
-                arrivals = raw_arrivals if isinstance(raw_arrivals, list) else []
-                typed_arrivals: list[SubwayArrival] = [
-                    a for a in arrivals if isinstance(a, SubwayArrival)
-                ]
-
-                embed, payload = build_transit_recurring_embed(
-                    station_name=station_name,
-                    line=line,
-                    arrivals=typed_arrivals,
-                    now=now,
-                )
-
-                ctx.in_flight_notification_ids.add(notification.id)
-                await ctx.queue.put(
-                    SendDmTask(
+                    ctx.in_flight_notification_ids.add(notification.id)
+                    await ctx.queue.put(
+                        SendDmTask(
+                            notification_id=notification.id,
+                            user_id=user.id,
+                            discord_id=user.discord_id,
+                            embed=embed,
+                            payload=payload,
+                        )
+                    )
+                    _logger.info(
+                        "transit_queued",
                         notification_id=notification.id,
                         user_id=user.id,
-                        discord_id=user.discord_id,
-                        embed=embed,
-                        payload=payload,
+                        station_name=station_name,
+                        line=line,
                     )
-                )
-                _logger.info(
-                    "transit_queued",
-                    notification_id=notification.id,
-                    user_id=user.id,
-                    station_name=station_name,
-                    line=line,
-                )
-    except SubwayApiUnavailable as exc:
-        _logger.warning("transit_subway_api_unavailable", code=exc.code)
-        await enqueue_admin_alerts(ctx.queue, ctx.settings, CrawlerSource.SUBWAY, exc)
+                except SubwayApiUnavailable as exc:
+                    _logger.warning(
+                        "transit_subway_api_unavailable",
+                        code=exc.code,
+                        notification_id=notification.id,
+                    )
+                    _subway_fail_exc = exc
+                except BotException as exc:
+                    _logger.warning(
+                        "transit_bot_exception",
+                        code=exc.code,
+                        notification_id=notification.id,
+                    )
+                    _subway_fail_exc = exc
+
+        # 루프 종료 후 실패가 있었으면 admin 알림을 틱당 1회만 발송한다.
+        if _subway_fail_exc is not None:
+            await enqueue_admin_alerts(
+                ctx.queue, ctx.settings, CrawlerSource.SUBWAY, _subway_fail_exc
+            )
     except BotException as exc:
         _logger.warning("transit_bot_exception", code=exc.code)
 
