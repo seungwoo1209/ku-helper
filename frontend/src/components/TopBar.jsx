@@ -1,7 +1,7 @@
 import { StatusPill } from './ui';
 
 const HEADINGS = {
-  dashboard: { crumb: "Workspace / Dashboard", en: "Good morning,", showUser: true },
+  dashboard: { crumb: "Workspace / Dashboard", en: "반갑습니다,", showUser: true },
   transit:   { crumb: "Workspace / Transit",   en: "지하철 알림",    ko: "" },
   lunch:     { crumb: "Workspace / Lunch",     en: "학식 & 주변 추천", ko: "" },
   library:   { crumb: "Workspace / Library",   en: "도서관 잔여석 감시", ko: "" },

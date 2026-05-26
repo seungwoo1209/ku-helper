@@ -88,6 +88,7 @@ function toDisplayItem(n) {
           { k: '노선', v: c.line },
           { k: '방향', v: c.direction },
           { k: '발송', v: `도착 ${c.minutes_before}분 전` },
+          { k: '혼잡도', v: c.include_congestion ? '포함' : '제외' },
         ],
       };
     }
@@ -100,6 +101,7 @@ function toDisplayItem(n) {
         { k: '노선', v: c.line },
         { k: '간격', v: `${c.repeat_interval_minutes}분` },
         { k: '시간', v: `${fmtTime(c.start_time)}–${fmtTime(c.end_time)}` },
+        { k: '혼잡도', v: c.include_congestion ? '포함' : '제외' },
       ],
     };
   }
@@ -113,6 +115,7 @@ function toDisplayItem(n) {
       conds: [
         { k: '시각', v: at },
         { k: '오늘의 추천', v: c.highlight_today_pick ? '강조' : '끄기' },
+        ...(c.max_price != null ? [{ k: '최대 가격', v: `${c.max_price.toLocaleString()}원` }] : []),
       ],
     };
   }
