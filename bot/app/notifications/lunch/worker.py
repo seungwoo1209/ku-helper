@@ -1,16 +1,23 @@
 import asyncio
 import random
+from collections.abc import Awaitable
+from datetime import datetime, timedelta, timezone
+from datetime import time as datetime_time
+from typing import cast
+from zoneinfo import ZoneInfo
 
 import structlog
 
 from app.admin.alerts import CrawlerSource, enqueue_admin_alerts
-from app.core.database import async_session_maker
 from app.core.exceptions import BotException
 from app.crawlers.lunch.exceptions import LunchCrawlerFailed
 from app.crawlers.restaurants.exceptions import RestaurantsCrawlerFailed
 from app.db.models import NotificationDeliveryStatus, NotificationType
 from app.notifications.history_repository import NotificationHistoryRepository
-from app.notifications.lunch.embeds import build_lunch_immediate_embed
+from app.notifications.lunch.embeds import (
+    build_lunch_immediate_embed,
+    build_lunch_scheduled_embed,
+)
 from app.notifications.lunch.repository import ImmediateSendRequestRepository
 from app.notifications.repository import NotificationRepository
 from app.notifications.sender import SendDmTask
@@ -21,14 +28,211 @@ _logger = structlog.get_logger(__name__)
 _RESTAURANTS_SAMPLE_SIZE = 3
 _POLL_LIMIT = 50
 
+# KST 타임존 — 윈도우 비교와 dedup 키 날짜 계산에 사용한다.
+_KST = ZoneInfo("Asia/Seoul")
 
-async def run_lunch_job() -> None:
-    """정기 LUNCH 구독 폴링 (§C-4 후속). 현재는 활성 구독 수만 로그."""
+# 정시 윈도우 허용 범위(초). 60초 폴링 granularity + 재기동 jitter 흡수용.
+_NOTIFY_AT_GRACE_SECONDS = 180
+
+# dedup Redis 키 TTL(초). 25h — 하루 1회 발송 보장 + 자정 즈음 TTL 만료 방지 여유.
+_DEDUP_TTL_SECONDS = 90000
+
+
+def _parse_notify_at(raw: str | None) -> datetime_time | None:
+    """config JSONB 의 'HH:MM:SS' 또는 'HH:MM' 문자열 → datetime.time.
+
+    Pydantic time 직렬화는 HH:MM:SS, 수동 INSERT 시 HH:MM 도 허용한다.
+    파싱 실패 시 None 반환 — 호출자가 skip 처리한다.
+    """
+    if raw is None:
+        return None
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+async def run_lunch_job(ctx: JobContext) -> None:
+    """정기 LUNCH 구독을 폴링하여 notify_at 정시 윈도우 조건 충족 시 Sender 큐에 적재한다.
+
+    흐름:
+    1. 활성 LUNCH 구독 목록 조회 (User JOIN 포함).
+    2. 각 구독마다 notify_at 정시 윈도우 + Redis dedup 검사.
+    3. 조건 충족 시 LunchClient + RestaurantsClient 호출 → 임베드 빌드 → 큐 적재.
+    4. 크롤러 실패는 구독별로 격리하고 틱당 1회 admin alert.
+
+    ctx.lunch_client / ctx.restaurants_client 가 None 이면 잡 skip.
+    """
+    lunch_client = ctx.lunch_client
+    restaurants_client = ctx.restaurants_client
+    if lunch_client is None or restaurants_client is None:
+        return
+
+    redis = ctx.redis_client
+
+    now = datetime.now(tz=timezone.utc)
+    now_kst = now.astimezone(_KST)
+    kst_date = now_kst.date().isoformat()
+
+    # 틱 내 크롤러 실패 여부를 추적해 admin alert 를 틱당 1회만 발송한다.
+    _last_crawler_exc: BaseException | None = None
+    _last_crawler_source: CrawlerSource | None = None
+
     try:
-        async with async_session_maker() as session:
+        async with ctx.session_maker() as session:
             repo = NotificationRepository(session)
-            subs = await repo.list_active_subscriptions(NotificationType.LUNCH)
+            subs = await repo.list_active_subscriptions_with_user(
+                NotificationType.LUNCH
+            )
         _logger.info("lunch_poll_tick", count=len(subs))
+
+        for notification, user in subs:
+            cfg = notification.config
+
+            # 1. notify_at 파싱.
+            notify_at = _parse_notify_at(cfg.get("notify_at"))
+            if notify_at is None:
+                _logger.warning(
+                    "lunch_skip_invalid_notify_at",
+                    notification_id=notification.id,
+                    raw_notify_at=cfg.get("notify_at"),
+                )
+                continue
+
+            # 2. 정시 윈도우 검사 — aware datetime 으로 변환해 비교.
+            notify_at_dt = datetime(
+                now_kst.year,
+                now_kst.month,
+                now_kst.day,
+                notify_at.hour,
+                notify_at.minute,
+                notify_at.second,
+                tzinfo=_KST,
+            )
+            grace_end_dt = notify_at_dt + timedelta(seconds=_NOTIFY_AT_GRACE_SECONDS)
+
+            if now_kst < notify_at_dt:
+                # 아직 발송 시각 전 — skip.
+                _logger.debug(
+                    "lunch_skip_before_notify_at",
+                    notification_id=notification.id,
+                    now_kst=now_kst.isoformat(),
+                    notify_at=notify_at.isoformat(),
+                )
+                continue
+
+            if now_kst >= grace_end_dt:
+                # 윈도우 지남(지각) — dedup 키 SET 하지 않고 skip.
+                _logger.debug(
+                    "lunch_skip_after_grace",
+                    notification_id=notification.id,
+                    now_kst=now_kst.isoformat(),
+                    notify_at=notify_at.isoformat(),
+                )
+                continue
+
+            # 3. 하루 1회 dedup 검사.
+            dedup_key = f"lunch_sent:{notification.id}:{kst_date}"
+            existing = await cast(
+                "Awaitable[object]",
+                redis.get(dedup_key),
+            )
+            if existing is not None:
+                _logger.debug(
+                    "lunch_skip_already_sent_today",
+                    notification_id=notification.id,
+                    kst_date=kst_date,
+                )
+                continue
+
+            # 4. 크롤러 호출 — 구독별 try/except 로 격리.
+            try:
+                menu, pool = await asyncio.gather(
+                    lunch_client.fetch_today_menu(),
+                    restaurants_client.fetch_pool(),
+                )
+            except (LunchCrawlerFailed, RestaurantsCrawlerFailed) as exc:
+                # 크롤러 실패 — dedup 키 SET 하지 않아 윈도우 안에서 다음 틱 재시도 가능.
+                source = (
+                    CrawlerSource.LUNCH
+                    if isinstance(exc, LunchCrawlerFailed)
+                    else CrawlerSource.RESTAURANTS
+                )
+                _logger.warning(
+                    "lunch_crawler_failed",
+                    notification_id=notification.id,
+                    source=source,
+                    reason=str(exc)[:200],
+                )
+                _last_crawler_exc = exc
+                _last_crawler_source = source
+                continue
+
+            # 5. 추천 맛집 샘플.
+            recommend_count = int(cfg.get("recommend_count", _RESTAURANTS_SAMPLE_SIZE))
+            sampled = (
+                tuple(random.sample(pool, min(recommend_count, len(pool))))
+                if pool
+                else ()
+            )
+
+            # 6. 임베드 빌드.
+            highlight = bool(cfg.get("highlight_today_pick", True))
+            embed = build_lunch_scheduled_embed(menu, sampled, highlight=highlight)
+
+            # 7. payload.
+            payload = {
+                "cafeteria_name": menu.cafeteria_name,
+                "date": menu.date_str,
+                "weekday": menu.weekday,
+                "corners": [
+                    {
+                        "name": c.name,
+                        "time": c.time,
+                        "meal": c.meal,
+                        "menus": list(c.menus),
+                    }
+                    for c in menu.corners
+                ],
+                "restaurants": [
+                    {
+                        "name": r.name,
+                        "category": r.category,
+                        "address": r.address,
+                        "link": r.link,
+                    }
+                    for r in sampled
+                ],
+            }
+
+            # 8. Sender 큐 적재 + dedup 키 SET.
+            await ctx.queue.put(
+                SendDmTask(
+                    notification_id=notification.id,
+                    user_id=user.id,
+                    discord_id=user.discord_id,
+                    embed=embed,
+                    payload=payload,
+                )
+            )
+            await cast(
+                "Awaitable[object]",
+                redis.set(dedup_key, "1", ex=_DEDUP_TTL_SECONDS),
+            )
+            _logger.info(
+                "lunch_queued",
+                notification_id=notification.id,
+                user_id=user.id,
+            )
+
+        # 루프 종료 후 크롤러 실패가 있었으면 틱당 1회만 admin alert.
+        if _last_crawler_exc is not None and _last_crawler_source is not None:
+            await enqueue_admin_alerts(
+                ctx.queue, ctx.settings, _last_crawler_source, _last_crawler_exc
+            )
+
     except BotException as exc:
         _logger.exception("lunch_poll_failed", code=exc.code)
 
