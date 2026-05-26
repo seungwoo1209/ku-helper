@@ -3,6 +3,7 @@ import { getAccessToken, callRefresh } from './auth';
 
 const BASE = '/api/v1/me/notifications';
 const IMMEDIATE = '/api/v1/me/immediate-send';
+const HISTORY_BASE = '/api/v1/me/notification-history';
 
 function authHeaders() {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken()}` };
@@ -131,6 +132,46 @@ function toDisplayItem(n) {
   }
 
   return base;
+}
+
+export async function listNotificationHistory() {
+  const res = await authFetch(HISTORY_BASE);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function fmtSentAt(isoStr) {
+  const kst = new Date(new Date(isoStr).getTime() + 9 * 60 * 60 * 1000);
+  const mm = String(kst.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(kst.getUTCDate()).padStart(2, '0');
+  const hh = String(kst.getUTCHours()).padStart(2, '0');
+  const min = String(kst.getUTCMinutes()).padStart(2, '0');
+  return `${mm}-${dd} ${hh}:${min}`;
+}
+
+function historyItemToDisplay(h) {
+  const time = fmtSentAt(h.sent_at);
+  const fail = h.status === 'FAILED';
+  const p = h.payload ?? {};
+
+  if (h.type === 'TRANSIT') {
+    if (fail) return { time, kind: 'TRANSIT', title: '교통 알림', detail: h.failure_reason ?? '오류', fail };
+    const first = p.arrivals?.[0];
+    const detail = first ? `${first.direction} · 약 ${Math.round(first.arrival_seconds / 60)}분 후` : '';
+    return { time, kind: 'TRANSIT', title: `${p.station_name} ${p.line}`, detail, fail };
+  }
+  if (h.type === 'LUNCH') {
+    const detail = p.restaurants?.map(r => r.name).join(' / ') ?? '';
+    return { time, kind: 'LUNCH', title: p.cafeteria_name ?? '학식 알림', detail, fail };
+  }
+  if (h.type === 'LIBRARY') {
+    return { time, kind: 'LIBRARY', title: `${p.label} 잔여 ${p.available}석`, detail: `임계값 ${p.threshold}석 이하 도달`, fail };
+  }
+  return { time, kind: h.type, title: h.type, detail: h.failure_reason ?? '', fail };
+}
+
+export function buildHistoryFromResponse(items) {
+  return items.map(historyItemToDisplay);
 }
 
 export function buildStateFromNotifications(notifications) {
