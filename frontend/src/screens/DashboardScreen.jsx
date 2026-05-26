@@ -23,7 +23,58 @@ function lunchRows(rules) {
   }));
 }
 
-const CatCard = ({ num, name, summaryNum, unit, sub, rows, checked, onToggle, onOpen, catKey }) => (
+function libraryRows(rooms) {
+  const active = rooms.filter(r => r.on).slice(0, 2);
+  if (!active.length) return [{ left: '등록된 도서관 알림 없음', when: '–' }];
+  return active.map(r => ({
+    left: r.name,
+    when: r.config?.urgent_threshold ? '긴급' : '임계',
+  }));
+}
+
+function todayKST() {
+  const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  return `${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+function computeStats(state) {
+  const { transit, lunch, library, history } = state;
+  const today = todayKST();
+
+  const todayHistory = history.filter(h => h.time.startsWith(today));
+  const todaySent    = todayHistory.filter(h => !h.fail).length;
+
+  const successCount = history.filter(h => !h.fail).length;
+  const successRate  = history.length > 0
+    ? (successCount / history.length * 100).toFixed(1) + '%'
+    : '–';
+
+  const activeRules = transit.rules.filter(r => r.on).length
+    + lunch.rules.filter(r => r.on).length
+    + library.rooms.filter(r => r.on).length;
+
+  const lastSync = history.length > 0 ? history[0].time.split(' ')[1] : '–';
+
+  const todayCount = (kind) => todayHistory.filter(h => h.kind === kind && !h.fail).length;
+
+  const captionParts = [
+    todayCount('TRANSIT') && `교통 ${todayCount('TRANSIT')}건`,
+    todayCount('LUNCH')   && `점심 ${todayCount('LUNCH')}건`,
+    todayCount('LIBRARY') && `도서관 ${todayCount('LIBRARY')}건`,
+  ].filter(Boolean);
+  const caption = captionParts.length > 0
+    ? `오늘 ${captionParts.join(', ')} 발송되었습니다.`
+    : '오늘 발송된 알림이 없습니다.';
+
+  const lastSentOf = (kind) => {
+    const item = history.find(h => h.kind === kind);
+    return item ? `마지막 발송 · ${item.time}` : '발송 이력 없음';
+  };
+
+  return { todaySent, successRate, activeRules, lastSync, caption, lastSentOf };
+}
+
+const CatCard = ({ num, name, summaryNum, unit, sub, rows, checked, onToggle, onOpen, catKey, lastSentLabel }) => (
   <div className="cat" data-cat={catKey}>
     <div className="cat-head">
       <div className="cat-title">
@@ -44,18 +95,17 @@ const CatCard = ({ num, name, summaryNum, unit, sub, rows, checked, onToggle, on
     </div>
     <div className="cat-foot">
       <button className="link" onClick={onOpen}>규칙 관리 →</button>
-      <span className="hint">마지막 발송 · 32분 전</span>
+      <span className="hint">{lastSentLabel}</span>
     </div>
   </div>
 );
 
 const DashboardScreen = ({ state, setState, openRule }) => {
-  const { transit, lunch, library, feed } = state;
+  const { transit, lunch, library, history } = state;
+  const { todaySent, successRate, activeRules, lastSync, caption, lastSentOf } = computeStats(state);
 
-  /* 카테고리 토글 → 해당 카테고리 전체 규칙 bulk enable/disable */
   async function handleCategoryToggle(category, rulesKey, enabled) {
     const rules = state[category][rulesKey];
-    // 낙관적 업데이트
     setState(s => ({
       ...s,
       [category]: {
@@ -63,17 +113,13 @@ const DashboardScreen = ({ state, setState, openRule }) => {
         [rulesKey]: s[category][rulesKey].map(r => ({ ...r, on: enabled })),
       },
     }));
-    // 백엔드 동기화 — 하나라도 실패하면 낙관적 업데이트 롤백
     const results = await Promise.allSettled(
       rules.map(r => updateNotification(category, r.id, { enabled }))
     );
     if (results.some(r => r.status === 'rejected')) {
       setState(s => ({
         ...s,
-        [category]: {
-          ...s[category],
-          [rulesKey]: rules,
-        },
+        [category]: { ...s[category], [rulesKey]: rules },
       }));
     }
   }
@@ -84,20 +130,15 @@ const DashboardScreen = ({ state, setState, openRule }) => {
         <div className="hero-stat">
           <div className="label">오늘의 발송</div>
           <div className="figure">
-            12<sup>건</sup>
-            <span className="small">/ 14 예정</span>
+            {todaySent}<sup>건</sup>
           </div>
-          <div className="caption">
-            오전 8시 이후 지하철 알림 8건, 학식 1건, 도서관 임계값 알림 3건이 정상 발송되었습니다.
-            남은 알림은 활성 시간대(07:30–22:00) 내에 처리됩니다.
-          </div>
+          <div className="caption">{caption}</div>
         </div>
         <div className="hero-side">
-          <div className="row"><span className="k">활성 알림 규칙</span><span className="v">9개</span></div>
-          <div className="row"><span className="k">이번 주 발송</span><span className="v">68건</span></div>
-          <div className="row"><span className="k">발송 성공률</span><span className="v">99.2%</span></div>
-          <div className="row"><span className="k">크롤러 상태</span><span className="v">정상 · 4/4</span></div>
-          <div className="row"><span className="k">마지막 동기화</span><span className="v muted">11:42:08</span></div>
+          <div className="row"><span className="k">활성 알림 규칙</span><span className="v">{activeRules}개</span></div>
+          <div className="row"><span className="k">최근 발송</span><span className="v">{history.length}건</span></div>
+          <div className="row"><span className="k">발송 성공률</span><span className="v">{successRate}</span></div>
+          <div className="row"><span className="k">마지막 동기화</span><span className="v muted">{lastSync}</span></div>
         </div>
       </div>
 
@@ -111,6 +152,7 @@ const DashboardScreen = ({ state, setState, openRule }) => {
           checked={transit.rules.some(r => r.on)}
           onToggle={(v) => handleCategoryToggle('transit', 'rules', v)}
           onOpen={() => openRule('transit')}
+          lastSentLabel={lastSentOf('TRANSIT')}
         />
         <CatCard
           catKey="lunch" num="02" name="점심"
@@ -121,25 +163,24 @@ const DashboardScreen = ({ state, setState, openRule }) => {
           checked={lunch.rules.some(r => r.on)}
           onToggle={(v) => handleCategoryToggle('lunch', 'rules', v)}
           onOpen={() => openRule('lunch')}
+          lastSentLabel={lastSentOf('LUNCH')}
         />
         <CatCard
           catKey="library" num="03" name="도서관"
-          summaryNum={library.rooms.length} unit="열람실 감시"
+          summaryNum={library.rooms.filter(r => r.on).length} unit="열람실 감시"
           sub="잔여석 임계값 · 30초 이내 발송"
-          rows={[
-            { left: "제 1 열람실 — 20석 이하", when: "임계" },
-            { left: "제 4 열람실 — 8석 이하 (긴급)", when: "긴급" },
-          ]}
+          rows={libraryRows(library.rooms)}
           checked={library.rooms.some(r => r.on)}
           onToggle={(v) => handleCategoryToggle('library', 'rooms', v)}
           onOpen={() => openRule('library')}
+          lastSentLabel={lastSentOf('LIBRARY')}
         />
       </div>
 
       <div className="feed">
-        <SectionHead title="최근 알림" meta="최근 24시간 · 12건" />
+        <SectionHead title="최근 알림" meta={`${history.length}건`} />
         <div className="feed-list">
-          {feed.map((f, i) => (
+          {history.map((f, i) => (
             <div className="feed-item" key={i}>
               <span className="time">{f.time}</span>
               <span className="kind" data-cat={f.kind.toLowerCase()}><span className="kdot"></span>{f.kind}</span>
