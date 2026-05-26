@@ -56,14 +56,18 @@ function App() {
         }
         if (me) {
           setUser(me);
+          setState(s => ({
+            ...s,
+            transit: { rules: [] }, lunch: { rules: [] }, library: { rooms: [] }, history: [],
+          }));
           try {
             const notifications = await listNotifications();
             setState(s => ({ ...s, ...buildStateFromNotifications(notifications) }));
-          } catch (_) { /* DB 미연결 등 실패 시 SAMPLE 유지 */ }
+          } catch (_) {}
           try {
             const history = await listNotificationHistory();
             setState(s => ({ ...s, history: buildHistoryFromResponse(history) }));
-          } catch (_) { /* 이력 조회 실패 시 SAMPLE 유지 */ }
+          } catch (_) {}
         } else {
           clearTokens();
         }

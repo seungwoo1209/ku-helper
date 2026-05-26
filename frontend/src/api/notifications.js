@@ -3,7 +3,7 @@ import { getAccessToken, callRefresh } from './auth';
 
 const BASE = '/api/v1/me/notifications';
 const IMMEDIATE = '/api/v1/me/immediate-send';
-const HISTORY_BASE = '/api/v1/me/notification-history';
+const HISTORY_BASE = '/api/v1/me/notifications/history';
 
 function authHeaders() {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken()}` };
@@ -119,12 +119,13 @@ function toDisplayItem(n) {
   }
 
   if (n.type === 'LIBRARY') {
+    const roomLabel = { 0: '전체 열람실', 1: '제1열람실', 2: '제2열람실', 3: '제3열람실', 5: '제5열람실' }[c.reading_room_id] ?? `열람실 ${c.reading_room_id}`;
     return {
       ...base,
-      name: `열람실 ${c.reading_room_id}`,
+      name: roomLabel,
       sub: `임계 ${c.threshold}석${c.urgent_threshold ? ` · 긴급 ${c.urgent_threshold}석` : ''}`,
       conds: [
-        { k: '열람실', v: c.reading_room_id },
+        { k: '열람실', v: roomLabel },
         { k: '임계', v: `${c.threshold}석` },
         ...(c.urgent_threshold != null ? [{ k: '긴급', v: `${c.urgent_threshold}석` }] : []),
       ],

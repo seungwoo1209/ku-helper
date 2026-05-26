@@ -88,10 +88,10 @@ function LunchForm({ config, onChange }) {
 
 /* ── Library 폼 ─────────────────────────────────── */
 const READING_ROOMS = [
+  { id: 0, label: '전체 열람실' },
   { id: 1, label: '제1열람실' },
   { id: 2, label: '제2열람실' },
   { id: 3, label: '제3열람실' },
-  { id: 5, label: '대학원열람실' },
 ];
 
 function LibraryForm({ config, onChange }) {
@@ -121,10 +121,18 @@ function LibraryForm({ config, onChange }) {
 
 /* ── 기본 config 초기값 ──────────────────────────── */
 function defaultConfig(kind, existing) {
-  if (existing) return kind === 'transit' ? { direction: '상행', ...existing } : { ...existing };
-  if (kind === 'transit') return { mode: 'arrival', station_name: '', line: '2호선', direction: '상행', minutes_before: 3, start_time: '08:00', end_time: '09:30', repeat_interval_minutes: 15 };
-  if (kind === 'lunch')   return { notify_at: '11:30', recommend_count: 3, highlight_today_pick: true };
-  if (kind === 'library') return { reading_room_id: 1, threshold: 20, urgent_threshold: null };
+  if (kind === 'transit') {
+    const base = { mode: 'arrival', station_name: '', line: '2호선', direction: '상행', minutes_before: 3, start_time: '08:00', end_time: '09:30', repeat_interval_minutes: 15 };
+    return existing ? { ...base, ...existing } : base;
+  }
+  if (kind === 'lunch') {
+    const base = { notify_at: '11:30', recommend_count: 3, highlight_today_pick: true };
+    return existing ? { ...base, ...existing } : base;
+  }
+  if (kind === 'library') {
+    const base = { reading_room_id: 1, threshold: 20, urgent_threshold: null };
+    return existing ? { ...base, ...existing } : base;
+  }
   return {};
 }
 

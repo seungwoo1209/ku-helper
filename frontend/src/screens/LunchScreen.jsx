@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { SectionHead, EmbedPreview } from '../components/ui';
 import RuleRow from '../components/RuleRow';
-import { updateNotification } from '../api/notifications';
+import { updateNotification, immediateSendLunch } from '../api/notifications';
 import { fmtTime } from '../utils/time';
 
 const PREVIEW_FIELDS = [
@@ -10,6 +11,19 @@ const PREVIEW_FIELDS = [
 ];
 
 const LunchScreen = ({ state, setState, onEdit, onAdd }) => {
+  const [sendState, setSendState] = useState('idle');
+
+  async function handleSendNow() {
+    setSendState('sending');
+    try {
+      await immediateSendLunch();
+      setSendState('ok');
+    } catch (e) {
+      setSendState(e.message === 'RATE_LIMITED' ? 'rate' : 'err');
+    }
+    setTimeout(() => setSendState('idle'), 3000);
+  }
+
   async function handleToggle(id, enabled) {
     setState(s => ({
       ...s,
@@ -54,6 +68,9 @@ const LunchScreen = ({ state, setState, onEdit, onAdd }) => {
           </div>
           <button className="add-rule" onClick={onAdd}>
             <span className="plus">+</span> 새 점심 알림 만들기
+          </button>
+          <button className="link" onClick={handleSendNow} disabled={sendState === 'sending'} style={{ marginTop: 8 }}>
+            {sendState === 'sending' ? '발송 중…' : sendState === 'ok' ? '✓ 발송됨' : sendState === 'rate' ? '1분 후 재시도' : sendState === 'err' ? '오류 발생' : '지금 바로 발송 →'}
           </button>
         </div>
         <div>
