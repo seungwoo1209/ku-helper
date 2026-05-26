@@ -1,0 +1,136 @@
+name: deploy-bot
+
+# bot 컨테이너 이미지 빌드·푸시 → app EC2 rollout. 마이그레이션 단계 없음(봇은 스키마 변경 권한 없음).
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  AWS_REGION: ap-northeast-2
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/ku-helper-bot
+  TFSTATE_BUCKET_PREFIX: ku-helper-tfstate
+  TFLOCK_TABLE: ku-helper-tflock
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        run: |
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "image_tag=${short_sha}" >>"$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: ./bot
+          file: ./bot/Dockerfile
+          push: true
+          tags: |
+            ${{ env.GHCR_IMAGE }}:main
+            ${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  rollout:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+          # wrapper 가 stdout 에 추가 텍스트를 섞어 $(terraform output -raw ...) 치환을 오염시킨다.
+          terraform_wrapper: false
+
+      - name: Resolve infra outputs
+        id: tf
+        working-directory: infra/ephemeral
+        run: |
+          set -euo pipefail
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          terraform init \
+            -backend-config="bucket=${TFSTATE_BUCKET_PREFIX}-${ACCOUNT_ID}" \
+            -backend-config="dynamodb_table=${TFLOCK_TABLE}" \
+            -backend-config="region=${AWS_REGION}"
+          # ephemeral 인프라가 아직 안 올라온 경우 (spin-up 미실행) 가드한다.
+          if [ "$(terraform output -json | jq -r 'length')" = "0" ]; then
+            echo "::error::infra/ephemeral 의 출력값이 비어 있다. spin-up 워크플로를 먼저 실행하라."
+            exit 1
+          fi
+          declare -A out
+          for k in app_private_ip bastion_public_ip; do
+            v=$(terraform output -raw "$k" 2>/dev/null || true)
+            if [ -z "$v" ]; then
+              echo "::error::terraform output '$k' 가 비어 있다. ephemeral apply 결과를 확인하라."
+              exit 1
+            fi
+            out[$k]="$v"
+          done
+          {
+            echo "app_private_ip=${out[app_private_ip]}"
+            echo "bastion_ip=${out[bastion_public_ip]}"
+          } >>"$GITHUB_OUTPUT"
+          # SSH private key 는 terraform state 의 sensitive output 으로만 보관. 워크플로 로그에
+          # 노출되지 않도록 GITHUB_OUTPUT 에 넣지 않고 다음 step 으로 파일로 전달한다.
+          terraform output -raw ec2_ssh_private_key_pem >"$RUNNER_TEMP/ku-helper.pem"
+          chmod 0600 "$RUNNER_TEMP/ku-helper.pem"
+
+      - name: Prepare SSH key
+        run: |
+          install -d -m 0700 ~/.ssh
+          install -m 0600 "$RUNNER_TEMP/ku-helper.pem" ~/.ssh/ku-helper.pem
+          rm -f "$RUNNER_TEMP/ku-helper.pem"
+          # app private IP 는 runner 에서 keyscan 불가(도달 불가). accept-new 로 처리한다.
+          ssh-keyscan -H ${{ steps.tf.outputs.bastion_ip }} >>~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Rollout bot container on app EC2
+        env:
+          APP_PRIVATE_IP: ${{ steps.tf.outputs.app_private_ip }}
+          BASTION_IP: ${{ steps.tf.outputs.bastion_ip }}
+        run: |
+          # app EC2 의 22 는 bastion SG 참조로만 열려 있어 app 의 private IP 로만 도달한다.
+          # bastion 을 점프 호스트로 경유하고 최종 홉은 app private IP 로 SSH 한다. ssh -J
+          # 단축형은 명령행 -i 키가 최종 목적지에 일관되게 전달되지 않을 수 있어, ProxyCommand
+          # 로 두 홉 모두에 키를 명시한다.
+          ssh -o ProxyCommand="ssh -i ~/.ssh/ku-helper.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ec2-user@${BASTION_IP}" \
+              -i ~/.ssh/ku-helper.pem \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=accept-new \
+              ec2-user@${APP_PRIVATE_IP} <<EOF
+          set -euo pipefail
+          cd /opt/ku-helper
+          # refresh-env.sh 가 app.env(0600 root)와 ghcr 자격(/root/.docker)을 root 로 만든다.
+          # compose 도 root 로 실행해야 app.env 를 읽고 ghcr 이미지를 pull 할 수 있다.
+          sudo /opt/ku-helper/refresh-env.sh
+          sudo docker compose pull bot
+          sudo docker compose up -d bot
+          EOF

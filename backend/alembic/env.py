@@ -1,4 +1,5 @@
 import asyncio
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -17,7 +18,20 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# 운영(IAM 모드) 에서는 Settings.database_url 이 비어있다. alembic 마이그레이션은
+# CI 워크플로가 RDS master 패스워드로 조립한 `ALEMBIC_DATABASE_URL` (또는
+# 임시 `DATABASE_URL`) 환경변수를 그대로 사용한다. 로컬 dev/test 는 기존대로
+# Settings 의 database_url 을 fallback 으로 쓴다.
+_alembic_url = (
+    os.environ.get("ALEMBIC_DATABASE_URL")
+    or os.environ.get("DATABASE_URL")
+    or get_settings().database_url
+)
+if not _alembic_url:
+    raise RuntimeError(
+        "ALEMBIC_DATABASE_URL or DATABASE_URL must be set to run alembic"
+    )
+config.set_main_option("sqlalchemy.url", _alembic_url)
 
 target_metadata = Base.metadata
 

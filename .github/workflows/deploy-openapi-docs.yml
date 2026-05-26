@@ -43,7 +43,9 @@ jobs:
       - name: Regenerate openapi.json
         working-directory: ./backend
         env: # dummy env variable로 FastAPI 애플리케이션 실행
+          USE_IAM_AUTH: "false"
           DATABASE_URL: postgresql+asyncpg://user:pass@localhost:5432/dummy
+          REDIS_URL: redis://localhost:6379/0
           CORS_ORIGINS: '["http://localhost:3000"]'
           JWT_SECRET: ci-dummy-secret-not-used-at-runtime
           DISCORD_CLIENT_ID: dummy

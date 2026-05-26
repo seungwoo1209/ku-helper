@@ -17,6 +17,10 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/guard-cd.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/roadmap-update-reminder.sh\""
           }
         ]
       }
@@ -57,9 +61,6 @@
       "Bash(cat:*)",
       "Bash(wc:*)",
       "Bash(docker:*)"
-    ],
-    "deny": [
-      "Bash(git push:*)"
     ]
   }
 }

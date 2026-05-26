@@ -10,7 +10,7 @@ import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user
+from app.domains.users.dependencies import get_current_user
 from app.domains.users.models import User, UserRole, UserStatus
 from app.main import app
 
@@ -50,14 +50,8 @@ async def user(user_factory: UserFactory) -> User:
 
 @pytest_asyncio.fixture
 async def authed_client(
-    client: AsyncClient, user: User, db_session: AsyncSession
+    client: AsyncClient, user: User
 ) -> AsyncIterator[tuple[AsyncClient, User]]:
-    # 운영의 get_current_user는 별도 세션에서 User를 SELECT하여 detached로 service에
-    # 전달한다. 테스트에서도 그 시나리오를 그대로 재현하기 위해 픽스처가 만든 User를
-    # 세션에서 분리한다. 분리하지 않으면 soft_delete 회귀 같은 detached-only 버그를
-    # 통합 테스트가 놓친다.
-    db_session.expunge(user)
-
     async def _override_get_current_user() -> User:
         return user
 

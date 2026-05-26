@@ -47,7 +47,7 @@ CLAUDE.md의 7개 절대 규칙을 보강한다. 충돌 시 CLAUDE.md가 우선.
 - 공개 함수: `enqueue_admin_alerts(queue, settings, source, exc)` — 호출 즉시 `settings.admin_discord_ids` 전원에게 `SendDmTask` 1건씩 큐 적재.
 - Single-trigger 정책: 크롤러 예외 1회 = admin DM 1회. 임계값·카운터·쿨다운 없음. 원본 요구사항(`docs/requirements/features.md` F-22: "실패 시 1분 이내 DM") 직역.
 - admin DM 도 일반 사용자 알림과 동일 Sender 큐를 통과한다. 별 발송 경로 없음.
-- 실 운영에서 노이즈 폭주가 관찰되면 가드(임계값·5분 윈도우 카운터·30분 쿨다운) 재도입 — `bot/.claude/roadmap.md` §E 신규 후속 항목 참고.
+- 실 운영에서 노이즈 폭주가 관찰되면 가드(임계값·5분 윈도우 카운터·30분 쿨다운) 재도입 — `bot/ROADMAP.md` §E 신규 후속 항목 참고.
 
 ## 상태 기반 중복 방지 (F-14, 도서관)
 

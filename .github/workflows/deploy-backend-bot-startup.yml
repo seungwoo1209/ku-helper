@@ -1,0 +1,55 @@
+name: deploy-backend-bot-startup
+
+# push main 시 backend/bot 경로 변화 감지 후 각각의 deploy-* 워크플로 호출.
+# 이미지 구성과 무관한 변화(*.md, openapi.json, .claude/, ROADMAP.md, docs/) 는 무시.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+  pull-requests: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      bot: ${{ steps.filter.outputs.bot }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '!backend/**/*.md'
+              - '!backend/ROADMAP.md'
+              - '!backend/openapi.json'
+              - '!backend/docs/**'
+              - '!backend/.claude/**'
+            bot:
+              - 'bot/**'
+              - '!bot/**/*.md'
+              - '!bot/ROADMAP.md'
+              - '!bot/docs/**'
+              - '!bot/.claude/**'
+
+  deploy-backend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
+    uses: ./.github/workflows/deploy-backend.yml
+    secrets: inherit
+
+  deploy-bot:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.bot == 'true'
+    uses: ./.github/workflows/deploy-bot.yml
+    secrets: inherit

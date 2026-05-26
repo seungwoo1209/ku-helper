@@ -1,0 +1,298 @@
+name: spin-up
+
+# AWS 인프라(infra/ephemeral) 전체를 올리고 backend·bot 컨테이너를 배포한다.
+# 이미 spin-up 이 한 번 끝난 환경에서 다시 돌리면 idempotent 하게 동작.
+
+on:
+  workflow_dispatch:
+    inputs:
+      developer_ip_cidr:
+        description: "Bastion SSH 22 ingress 를 허용할 단일 CIDR (예: 1.2.3.4/32)."
+        required: true
+        type: string
+      rebuild_ami:
+        description: "Packer 로 AMI 를 새로 빌드할지 (보통 false)."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-northeast-2
+  TFSTATE_BUCKET_PREFIX: ku-helper-tfstate
+  TFLOCK_TABLE: ku-helper-tflock
+  GHCR_BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/ku-helper-backend
+  GHCR_BOT_IMAGE: ghcr.io/${{ github.repository_owner }}/ku-helper-bot
+
+jobs:
+  packer-build:
+    if: ${{ inputs.rebuild_ami }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-packer@v3
+        with:
+          version: "1.10.0"
+
+      - name: Build AMI
+        working-directory: infra/packer
+        run: |
+          packer init app.pkr.hcl
+          packer validate app.pkr.hcl
+          packer build app.pkr.hcl
+
+  build-images:
+    # 인프라가 올라간 직후 EC2 user-data 가 ghcr 에서 이미지 pull 하므로 미리 push 해 둔다.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ env.GHCR_BACKEND_IMAGE }}:main
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: ./bot
+          file: ./bot/Dockerfile
+          push: true
+          tags: ${{ env.GHCR_BOT_IMAGE }}:main
+          cache-from: type=gha,scope=bot
+          cache-to: type=gha,mode=max,scope=bot
+
+  terraform-apply:
+    needs: [packer-build, build-images]
+    # packer-build 가 돌면 그 다음에 실행되도록 함. packer-build 가 skip 되면 즉시 실행.
+    if: ${{ !cancelled() && (needs.packer-build.result == 'success' || needs.packer-build.result == 'skipped') && needs.build-images.result == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      app_ip: ${{ steps.tfout.outputs.app_ip }}
+      app_private_ip: ${{ steps.tfout.outputs.app_private_ip }}
+      bastion_ip: ${{ steps.tfout.outputs.bastion_ip }}
+      rds_endpoint: ${{ steps.tfout.outputs.rds_endpoint }}
+      rds_port: ${{ steps.tfout.outputs.rds_port }}
+      rds_master_secret_arn: ${{ steps.tfout.outputs.rds_master_secret_arn }}
+      api_url: ${{ steps.tfout.outputs.api_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+          # wrapper 가 stdout 에 추가 텍스트를 섞어 $(terraform output -raw ...) 치환을 오염시킨다.
+          terraform_wrapper: false
+
+      - name: terraform apply
+        working-directory: infra/ephemeral
+        env:
+          # 시크릿은 terraform 으로 주입하지 않는다(state 평문 방지).
+          # 시크릿 SSM 파라미터는 persistent 모듈이 placeholder 로 만들고, 실제 값은 사람이 1회
+          # aws ssm put-parameter 로 등록한다(infra/roadmap.md 참고).
+          TF_VAR_tfstate_bucket: ${{ env.TFSTATE_BUCKET_PREFIX }}-${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}
+          TF_VAR_developer_ip_cidr: ${{ inputs.developer_ip_cidr }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${TF_VAR_tfstate_bucket}" \
+            -backend-config="dynamodb_table=${TFLOCK_TABLE}" \
+            -backend-config="region=${AWS_REGION}"
+          terraform apply -auto-approve
+
+      - id: tfout
+        working-directory: infra/ephemeral
+        run: |
+          {
+            echo "app_ip=$(terraform output -raw app_public_ip)"
+            echo "app_private_ip=$(terraform output -raw app_private_ip)"
+            echo "bastion_ip=$(terraform output -raw bastion_public_ip)"
+            echo "rds_endpoint=$(terraform output -raw rds_endpoint)"
+            echo "rds_port=$(terraform output -raw rds_port)"
+            echo "rds_master_secret_arn=$(terraform output -raw rds_master_secret_arn)"
+            echo "api_url=$(terraform output -raw api_url)"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Stash SSH private key for later jobs
+        working-directory: infra/ephemeral
+        run: |
+          terraform output -raw ec2_ssh_private_key_pem >$RUNNER_TEMP/ku-helper.pem
+          chmod 0600 $RUNNER_TEMP/ku-helper.pem
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssh-key
+          path: ${{ runner.temp }}/ku-helper.pem
+          retention-days: 1
+          if-no-files-found: error
+
+  bootstrap-rds-iam:
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ssh-key
+          path: ${{ runner.temp }}
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Create rds_iam grant (idempotent)
+        env:
+          BASTION_IP: ${{ needs.terraform-apply.outputs.bastion_ip }}
+          RDS_HOST: ${{ needs.terraform-apply.outputs.rds_endpoint }}
+          RDS_PORT: ${{ needs.terraform-apply.outputs.rds_port }}
+          RDS_MASTER_SECRET_ARN: ${{ needs.terraform-apply.outputs.rds_master_secret_arn }}
+        run: |
+          chmod 0600 $RUNNER_TEMP/ku-helper.pem
+          mkdir -p ~/.ssh && chmod 0700 ~/.ssh
+          ssh-keyscan -H "$BASTION_IP" >>~/.ssh/known_hosts 2>/dev/null || true
+          ssh -i $RUNNER_TEMP/ku-helper.pem -o StrictHostKeyChecking=accept-new \
+              -f -N -L 15432:${RDS_HOST}:${RDS_PORT} \
+              ec2-user@${BASTION_IP}
+          MASTER_PW=$(aws secretsmanager get-secret-value \
+            --secret-id "$RDS_MASTER_SECRET_ARN" \
+            --query SecretString --output text \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["password"])')
+          PGPASSWORD="$MASTER_PW" psql -h localhost -p 15432 -U postgres -d ku_helper <<'SQL'
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ku_helper_app') THEN
+              CREATE USER ku_helper_app WITH LOGIN;
+            END IF;
+          END $$;
+          GRANT rds_iam TO ku_helper_app;
+          GRANT ALL PRIVILEGES ON DATABASE ku_helper TO ku_helper_app;
+          GRANT ALL ON SCHEMA public TO ku_helper_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ku_helper_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ku_helper_app;
+          SQL
+          pkill -f "ssh.*15432:${RDS_HOST}" || true
+
+  migrate-and-rollout:
+    needs: [terraform-apply, bootstrap-rds-iam]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.DEPLOYMENT_AWS_ACCOUNT_ID }}:role/ku-helper-github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: astral-sh/setup-uv@v3
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ssh-key
+          path: ${{ runner.temp }}
+
+      - name: Alembic migrate (via bastion tunnel)
+        working-directory: backend
+        env:
+          BASTION_IP: ${{ needs.terraform-apply.outputs.bastion_ip }}
+          RDS_HOST: ${{ needs.terraform-apply.outputs.rds_endpoint }}
+          RDS_PORT: ${{ needs.terraform-apply.outputs.rds_port }}
+          RDS_MASTER_SECRET_ARN: ${{ needs.terraform-apply.outputs.rds_master_secret_arn }}
+          # alembic 은 ALEMBIC_DATABASE_URL 만 사용하지만, env.py 가 import 하는
+          # app.core.database 가 module-level 에서 Settings() 를 인스턴스화한다.
+          # 마이그레이션은 비밀을 사용하지 않으므로 검증 통과용 더미만 주입한다.
+          JWT_SECRET: alembic-only-dummy-not-a-real-secret
+          DISCORD_CLIENT_ID: dummy
+          DISCORD_CLIENT_SECRET: dummy
+          DISCORD_BOT_TOKEN: dummy
+          DISCORD_REDIRECT_URI: https://dummy.invalid/callback
+          USE_IAM_AUTH: "false"
+          DATABASE_URL: postgresql+asyncpg://alembic-dummy
+          REDIS_URL: redis://alembic-dummy
+        run: |
+          chmod 0600 $RUNNER_TEMP/ku-helper.pem
+          mkdir -p ~/.ssh && chmod 0700 ~/.ssh
+          uv sync --no-dev
+          ssh-keyscan -H "$BASTION_IP" >>~/.ssh/known_hosts 2>/dev/null || true
+          ssh -i $RUNNER_TEMP/ku-helper.pem -o StrictHostKeyChecking=accept-new \
+              -f -N -L 15432:${RDS_HOST}:${RDS_PORT} \
+              ec2-user@${BASTION_IP}
+          MASTER_PW=$(aws secretsmanager get-secret-value \
+            --secret-id "$RDS_MASTER_SECRET_ARN" \
+            --query SecretString --output text \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["password"])')
+          export ALEMBIC_DATABASE_URL="postgresql+asyncpg://postgres:${MASTER_PW}@localhost:15432/ku_helper"
+          uv run alembic upgrade head
+          pkill -f "ssh.*15432:${RDS_HOST}" || true
+
+      - name: Rollout backend + bot on app EC2
+        env:
+          APP_PRIVATE_IP: ${{ needs.terraform-apply.outputs.app_private_ip }}
+          BASTION_IP: ${{ needs.terraform-apply.outputs.bastion_ip }}
+        run: |
+          chmod 0600 $RUNNER_TEMP/ku-helper.pem
+          mkdir -p ~/.ssh && chmod 0700 ~/.ssh
+          ssh-keyscan -H "$BASTION_IP" >>~/.ssh/known_hosts 2>/dev/null || true
+          # app private IP 는 runner 에서 keyscan 불가(도달 불가). accept-new 로 처리한다.
+          # app EC2 의 22 는 bastion SG 참조로만 열려 있어 private IP 로만 도달한다.
+          # bastion 을 점프 호스트로 경유하고 최종 홉은 app private IP 로 SSH 한다.
+          # ssh -J 단축형은 명령행 -i 키가 최종 목적지에 일관되게 전달되지 않을 수 있어,
+          # ProxyCommand 로 두 홉 모두에 키를 명시한다.
+          ssh -o ProxyCommand="ssh -i $RUNNER_TEMP/ku-helper.pem -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -W %h:%p ec2-user@${BASTION_IP}" \
+              -i $RUNNER_TEMP/ku-helper.pem \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=accept-new \
+              ec2-user@${APP_PRIVATE_IP} <<EOF
+          set -euo pipefail
+          cd /opt/ku-helper
+          # refresh-env.sh 가 app.env(0600 root)와 ghcr 자격(/root/.docker)을 root 로 만든다.
+          # compose 도 root 로 실행해야 app.env 를 읽고 ghcr 이미지를 pull 할 수 있다.
+          sudo /opt/ku-helper/refresh-env.sh
+          sudo docker compose pull
+          sudo docker compose up -d
+          EOF
+
+      - name: Smoke test
+        env:
+          API_URL: ${{ needs.terraform-apply.outputs.api_url }}
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS "${API_URL}/health" >/dev/null; then
+              echo "ku-helper api healthy at ${API_URL}"; exit 0
+            fi
+            sleep 5
+          done
+          echo "smoke test timed out" >&2
+          exit 1

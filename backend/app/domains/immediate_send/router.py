@@ -2,8 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.core.security import get_current_user
 from app.domains.immediate_send.dependencies import get_immediate_send_service
+from app.domains.users.dependencies import get_current_user
 from app.domains.immediate_send.schemas import (
     LibraryDispatchRequest,
     LibraryDispatchResponse,

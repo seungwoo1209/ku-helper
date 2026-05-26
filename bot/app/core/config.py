@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,10 +16,22 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
 
-    database_url: str
+    # DB · Redis 접근 모드. 로컬 dev/test 는 URL 방식, AWS 운영은 IAM 토큰 방식.
+    use_iam_auth: bool = False
+    aws_region: str = "ap-northeast-2"
 
-    # 외부 API 캐시·LIBRARY 상태머신·TRANSIT arrival dedup 공용. 미설정 시 봇 기동 실패.
-    redis_url: str
+    database_url: str = ""
+    redis_url: str = ""
+
+    # IAM 모드 전용 (use_iam_auth=True 일 때 필수). 인프라(SSM Parameter Store) 가 주입.
+    db_host: str = ""
+    db_port: int = 5432
+    db_name: str = ""
+    db_iam_user: str = ""
+    redis_host: str = ""
+    redis_port: int = 6379
+    redis_iam_user: str = ""
+    redis_cache_name: str = ""
 
     discord_bot_token: SecretStr
 
@@ -39,6 +52,32 @@ class Settings(BaseSettings):
     # §D 도서관 좌석 API. example-response.json 형태의 JSON 을 반환하는 엔드포인트.
     # 미설정 시 LibraryClient 가 즉시 LibraryCrawlerFailed 를 던지고 library worker 는 skip.
     library_seat_url: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_db_redis_inputs(self) -> Self:
+        if self.use_iam_auth:
+            missing = [
+                name
+                for name in (
+                    "db_host",
+                    "db_name",
+                    "db_iam_user",
+                    "redis_host",
+                    "redis_iam_user",
+                    "redis_cache_name",
+                )
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(
+                    f"USE_IAM_AUTH=true requires non-empty: {', '.join(missing)}"
+                )
+        else:
+            if not self.database_url:
+                raise ValueError("DATABASE_URL is required when USE_IAM_AUTH=false")
+            if not self.redis_url:
+                raise ValueError("REDIS_URL is required when USE_IAM_AUTH=false")
+        return self
 
 
 @lru_cache

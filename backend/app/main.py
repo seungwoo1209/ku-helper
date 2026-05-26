@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
     app.state.http_client = http_client
 
-    redis_client = await create_redis_client(settings.redis_url)
+    redis_client = await create_redis_client(settings)
     app.state.redis = redis_client
 
     logger.info("lifespan_startup")

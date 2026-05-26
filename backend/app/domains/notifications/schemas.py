@@ -3,7 +3,10 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.domains.notifications.models import NotificationType
+from app.domains.notifications.models import (
+    NotificationDeliveryStatus,
+    NotificationType,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -544,3 +547,133 @@ def read_from_orm(orm_obj: Any) -> BaseModel:
     각 Config의 Pydantic 검증이 자동으로 처리한다."""
     model = _READ_MODEL_BY_TYPE[orm_obj.type]
     return model.model_validate(orm_obj)
+
+
+# ---------------------------------------------------------------------------
+# History (F-17 알림 발송 이력 조회)
+# ---------------------------------------------------------------------------
+
+
+class NotificationHistoryRead(BaseModel):
+    """F-17 알림 발송 이력 1 건. 정기/즉시/관리자(F-22) 알림이 모두 같은 테이블에
+    적재되지만, F-17 응답은 *정기·즉시만* 노출한다(관리자 알림은 서비스 단에서 제외).
+
+    `type` 은 history 본체에 컬럼으로 존재하지 않아, Repository 가
+    `Notification.type` 또는 `ImmediateSendRequest.type` 을 LEFT JOIN + COALESCE
+    로 도출한 값을 함께 넘긴다. payload 는 발송 당시 임베드 스냅샷의 raw JSONB —
+    type 별로 키 구성이 다르며, 프론트가 type 분기 후 파싱한다(§E-1 합의 전까지의
+    Plan A 임시 정책).
+    """
+
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": 1024,
+                    "type": "LUNCH",
+                    "sent_at": "2026-05-26T02:30:00+00:00",
+                    "status": "SUCCESS",
+                    "failure_reason": None,
+                    "payload": {
+                        "cafeteria_name": "학생식당 1관",
+                        "date": "2026-05-26",
+                        "weekday": "화",
+                        "corners": [
+                            {
+                                "name": "일품관",
+                                "time": "11:00~13:30",
+                                "meal": "중식",
+                                "menus": ["김치찌개", "공기밥", "계란말이"],
+                            }
+                        ],
+                        "restaurants": [],
+                    },
+                    "notification_id": None,
+                    "immediate_send_request_id": 77,
+                },
+                {
+                    "id": 1023,
+                    "type": "LIBRARY",
+                    "sent_at": "2026-05-26T01:15:00+00:00",
+                    "status": "FAILED",
+                    "failure_reason": "Cannot send messages to this user",
+                    "payload": {
+                        "room_number": 1,
+                        "label": "제1열람실",
+                        "available": 3,
+                        "total": 200,
+                        "threshold": 20,
+                        "urgent_threshold": 5,
+                        "is_urgent": True,
+                        "rendered_at": "2026-05-26T01:14:55+00:00",
+                    },
+                    "notification_id": 88,
+                    "immediate_send_request_id": None,
+                },
+            ]
+        },
+    )
+
+    id: int = Field(
+        description="발송 이력 PK. 페이지네이션 cursor 도입 시 키로 사용 예정.",
+        examples=[1024],
+    )
+    type: NotificationType = Field(
+        description=(
+            "알림 유형. `notification_id` 가 살아 있으면 `Notification.type`, "
+            "`immediate_send_request_id` 가 살아 있으면 `ImmediateSendRequest.type` "
+            "에서 도출한다. 두 FK 가 모두 NULL(설정/요청 삭제 후)인 row 는 "
+            "응답에 포함되지 않는다."
+        ),
+        examples=["LUNCH"],
+    )
+    sent_at: datetime = Field(
+        description="실제 발송 시도 시각 (ISO 8601, UTC).",
+        examples=["2026-05-26T02:30:00+00:00"],
+    )
+    status: NotificationDeliveryStatus = Field(
+        description=(
+            "발송 결과. `SUCCESS` 는 Discord DM 전송 성공, `FAILED` 는 크롤러 실패·"
+            "사용자 DM 차단·재시도 3회 모두 실패 등을 포괄한다(F-20)."
+        ),
+        examples=["SUCCESS"],
+    )
+    failure_reason: str | None = Field(
+        default=None,
+        description=(
+            "FAILED 일 때만 채워지는 실패 사유. 상위 200자까지 잘려 저장된다. "
+            "사용자에게 그대로 노출되는 값이므로 가공 없이 표시 가능."
+        ),
+        examples=["Cannot send messages to this user"],
+    )
+    payload: dict[str, Any] = Field(
+        description=(
+            "발송 당시 임베드 스냅샷 (JSONB raw). 타입별 키 구성이 다르므로 "
+            "프론트가 `type` 으로 분기해 파싱한다. 적재 형식 정식 합의는 후속 PR."
+        ),
+        examples=[
+            {
+                "station_name": "성신여대입구",
+                "line": "4호선",
+                "direction": "상행",
+                "minutes_before": 10,
+                "train_no": "4123",
+                "headed_for": "당고개",
+                "arrival_seconds": 540,
+                "rendered_at": "2026-05-26T02:30:00+00:00",
+            }
+        ],
+    )
+    notification_id: int | None = Field(
+        default=None,
+        description="정기 알림 설정(`notifications.id`). 설정이 삭제됐다면 NULL.",
+        examples=[88],
+    )
+    immediate_send_request_id: int | None = Field(
+        default=None,
+        description=(
+            "즉시 발송 요청(`immediate_send_requests.id`). 요청이 삭제됐다면 NULL."
+        ),
+        examples=[77],
+    )

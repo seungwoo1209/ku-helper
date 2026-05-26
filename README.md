@@ -1,8 +1,6 @@
 # KU Helper — 건국대 캠퍼스 알리미
 
-디스코드 OAuth 로그인 한 번으로 학식 메뉴, 지하철 도착 시간, 도서관 좌석 현황을 Discord DM으로 자동 수신하는 캠퍼스 알림 시스템입니다.
-
-> 전공심화프로젝트(3242) · 문승우(202111283) · 김진하(202214311)
+디스코드 OAuth 로그인 한 번으로 학식 메뉴, 지하철 도착 시간, 도서관 좌석 현황을 Discord DM으로 자동 수신하는 캠퍼스 알림 시스템(전공심화프로젝트 repository)
 
 ---
 
@@ -24,29 +22,27 @@
 
 ```
 브라우저 (React SPA)
-    │  Discord OAuth2 로그인
+    │  Discord OAuth2 login
     ▼
-Nginx (HTTPS / 리버스 프록시 / 정적 파일)
+Nginx (HTTPS / reverse proxy / static files)
     │
-    ├──▶ FastAPI (API Server)
-    │       - Discord OAuth 콜백, JWT 발급
-    │       - 알림 설정 CRUD
-    │       - 즉시 발송 요청 큐 INSERT
-    │              │
-    │           PostgreSQL ◀─────────────┐
-    │              │                     │
-    └──▶ Bot Container                   │
-            APScheduler                 │
-              └─ 주기 폴링 ──────────────┘
-            asyncio.Queue
-              └─ 발송 워커 ──▶ Discord API (DM)
-            Crawlers
-              ├─ 학식 (Playwright)
-              └─ 음식점 (Naver Local Search API)
-            Redis (크롤링 캐시 / 중복 방지 쿨다운)
+    └──▶ FastAPI (API Server)
+            - Discord OAuth callback, issue JWT
+            - notification setting (CRUD)
+            - immediate notification sending API
+                   │
+                PostgreSQL ◀─────────────┐
+                   │                     │
+         Bot Container                   │
+             APScheduler                 │ 
+                └─ polling ──────────────┘
+              asyncio.Queue
+                └─ worker ──▶ Discord API (DM)
+              Crawlers
+                ├─ school cafeteria (Playwright)
+                └─ local resturants (Naver Local Search API)
+              Redis (crawling / refresh token / state value caching)
 ```
-
-두 컨테이너는 직접 통신하지 않으며 PostgreSQL을 매개로 연결됩니다.
 
 ---
 
@@ -114,11 +110,6 @@ npm install
 npm run dev
 ```
 
-### 전체 (Docker Compose)
-
-```bash
-docker compose up --build
-```
 
 ---
 

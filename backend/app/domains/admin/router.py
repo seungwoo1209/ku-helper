@@ -2,8 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.core.security import require_role
 from app.domains.admin.schemas import AdminHealthRead
+from app.domains.users.dependencies import require_role
 from app.domains.users.models import User, UserRole
 
 router = APIRouter()

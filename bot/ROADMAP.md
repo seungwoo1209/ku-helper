@@ -2,7 +2,7 @@
 
 다음 봇 PR을 시작할 때 잔여 작업·정책 미결 사항·우선순위를 먼저 확인한다.
 
-마지막 갱신: 2026-05-22 — §E F-22 single-trigger admin DM 완료(브랜치 `feat/roles`, PR #13 + 후속 가드 제거 커밋). 원본 요구사항 직역(임계값·카운터·쿨다운 없음). 노이즈 가드 재도입은 실 운영 측정 후 §E-2 항목으로 대기. 이전: 크롤러 4종 Redis TTL 캐시 이전 완료(브랜치 `feat/caching`). 모듈 dict 캐시 + asyncio.Lock 폐기. `JobContext.redis_client` 가 Optional → required 로 승격(`main.py` 가 redis ping 실패 시 부팅 차단). 신규 키: `subway:arrivals:{station_name}` TTL 30s, `lunch:menu:{iso_week}` TTL 7d, `restaurants:pool:{YYYY-MM-DD}` TTL 24h, `library:rooms:{sha1(url)[:12]}` TTL 15s. 4개 크롤러 모두 `__init__(http_client, settings, redis)` 시그니처로 통일 + dataclass↔JSON 직렬화 헬퍼 `_deserialize_*` 모듈 내부 전용. SETEX race 는 같은 값 덮어쓰기라 무해 → 분산락 미도입(KISS). 이전: F-06 TRANSIT 단발 도착 알림 종단 완료(백엔드 커밋 `dcb5ab2`). TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
+마지막 갱신: 2026-05-25 — RDS·ElastiCache IAM DB 인증 적용(issue #34, 브랜치 `infra/aws-rebuild`). Settings 에 `use_iam_auth` 분기 + `aws_auth.py` 신규(`generate_rds_iam_token` + SigV4 ElastiCache 토큰) + `database.py` `do_connect` 이벤트 + `redis.py` `CredentialProvider`. 기존 dev/test compose 동작 그대로(USE_IAM_AUTH=false 기본). 단위 테스트 미작성(후속 §0-4). `pyproject.toml` boto3>=1.34. 이전: §E F-22 single-trigger admin DM 완료(브랜치 `feat/roles`, PR #13 + 후속 가드 제거 커밋). 원본 요구사항 직역(임계값·카운터·쿨다운 없음). 노이즈 가드 재도입은 실 운영 측정 후 §E-2 항목으로 대기. 이전: 크롤러 4종 Redis TTL 캐시 이전 완료(브랜치 `feat/caching`). 모듈 dict 캐시 + asyncio.Lock 폐기. `JobContext.redis_client` 가 Optional → required 로 승격(`main.py` 가 redis ping 실패 시 부팅 차단). 신규 키: `subway:arrivals:{station_name}` TTL 30s, `lunch:menu:{iso_week}` TTL 7d, `restaurants:pool:{YYYY-MM-DD}` TTL 24h, `library:rooms:{sha1(url)[:12]}` TTL 15s. 4개 크롤러 모두 `__init__(http_client, settings, redis)` 시그니처로 통일 + dataclass↔JSON 직렬화 헬퍼 `_deserialize_*` 모듈 내부 전용. SETEX race 는 같은 값 덮어쓰기라 무해 → 분산락 미도입(KISS). 이전: F-06 TRANSIT 단발 도착 알림 종단 완료(백엔드 커밋 `dcb5ab2`). TRANSIT 임베드 고도화(커밋 `c9e4985`), LIBRARY 종단 완료.
 
 ## 진행 상황 스냅샷
 
@@ -63,6 +63,11 @@
 - `app/notifications/repository.py`: `list_active_subscriptions(type_)` + `get_user_status(user_id)`. (현재 시그니처는 `now` 인자 없이 호출 — 시간 의존 평가는 worker 가 담당하도록 위임.)
 - alembic 호환성 통합 테스트 1건: **미작성**. 일반 `pytest` 는 `Base.metadata.create_all` 사용 → 백엔드 마이그레이션 회귀를 못 잡음. §G-3 CI 와 묶어 보강 권장.
 
+### 0-4. RDS·ElastiCache IAM 인증 적용 (issue #34) — 부분 완료
+- 완료: aws_auth.py + Settings 분기 + database.py do_connect + redis.py CredentialProvider. backend 와 동일 패턴.
+- 잔여: 단위 테스트 미작성. 후보 — (1) Settings validator 분기 2건, (2) generate_rds_iam_token mock 호출 검증, (3) _ElastiCacheIamCredentialProvider.get_credentials 매 호출 새 토큰 발급 검증.
+- 운영 진입 조건은 backend roadmap §C-3 참고.
+
 ## §A. 발송 인프라
 
 ### A-1. DiscordBotClient 래퍼 (우선순위: 상) — 완료 (커밋 `c09030e`)
@@ -108,9 +113,10 @@
 - lunch 정기 잡은 여전히 stub (활성 구독 count 로그만, §C-4 후속). library 정기 잡은 본체 구현 완료(§D, 커밋 `5691741`). immediate_send lunch/transit/library 잡 3종도 등록됨.
 - 틱 주기 조정 가능 — TRANSIT/LIBRARY 부하 측정 후 5→10초 등 완화 검토.
 
-### B-4. F-08 혼잡도·지연 정보 (우선순위: 중)
-- 임베드 필드에 혼잡도(여유/보통/혼잡) + 지연 사유·예상 지연 시간 포함.
-- 부분 진척 (커밋 `c9e4985`): API `arvlCd`(진입/도착/출발/운행중) 가 임베드 field name 라벨로 노출됨. 정식 혼잡도(여유/보통/혼잡) 데이터 소스는 미상 — 별도 조사 필요. 지연 사유는 공공 API `arvlMsg3` 가 일부 케이스에 제공하지만 현재 미사용.
+### B-4. F-08 혼잡도·지연 정보 — **범위 제외 (2026-05-23)**
+- 서울 공공 API 가 정식 혼잡도(여유/보통/혼잡) 필드를 제공하지 않아 데이터 소스가 부재 → Out of Scope.
+- `arvlCd`(진입/도착/출발/운행중) 라벨은 F-07 임베드 (커밋 `c9e4985`) 에 이미 반영됨. 외부 데이터 소스 확보 시점까지 본 항목 재개 보류.
+- `docs/requirements/features.md` 스펙 변경 이력 2026-05-23 참고.
 
 ## §C. 점심 알림 — 즉시 발송 종단 우선
 
@@ -134,9 +140,9 @@
 - in-flight set 으로 같은 틱 중복 적재 방지. history INSERT 후 sender 가 set 에서 discard. transit F-07 패턴 재사용.
 - `SendDmTask` 에 `immediate_send_request_id` 필드 추가. `notification_id` 와 mutually exclusive.
 
-### C-4. F-10 가격 필터, F-12 오늘의 추천 — 후속
-- 가격 필터는 worker 단계에서. 오늘의 추천 하이라이트는 이전 추천 이력을 어디서 읽을지(history `payload` 활용) 결정 필요.
-- 정식 알림 시스템(스케줄 기반) 도입 시 다룬다. 현재 즉시 발송 종단만 우선.
+### C-4. F-12 오늘의 추천 — 후속
+- F-10 (가격 필터) 은 네이버 지역검색 API 가 가격 정보를 제공하지 않아 **범위 제외 (2026-05-23)**. `docs/requirements/features.md` 스펙 변경 이력 참고. F-09 임베드에서도 "가격대" 필드를 제거(식당명·대표 메뉴·거리만 노출 — 봇 코드 반영 필요 시 별 PR).
+- F-12 오늘의 추천 하이라이트는 이전 추천 이력을 어디서 읽을지(history `payload` 활용) 결정 필요. 정식 알림 시스템(F-11 스케줄 기반) 도입 시 다룬다. 현재 즉시 발송 종단만 우선.
 
 ## §D. 도서관 알림 + F-14 상태 기반 중복 방지 — 완료 (커밋 `5691741`, 즉시발송 `4f89342`)
 
@@ -201,9 +207,9 @@
 
 ## 권장 순서
 
-**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (완료) → TRANSIT 즉시 발송 (완료) → §D (완료, LIBRARY 정기+즉시발송) → §B-2a (F-06 arrival, 완료) → §C-4 → §E → §F → §G**
+**§0 → §A-1 → §A-2 → §B(F-07) (완료) → §A-3 (완료) → §C-1·C-2·C-3 lunch 즉시 발송 (완료) → TRANSIT 즉시 발송 (완료) → §D (완료, LIBRARY 정기+즉시발송) → §B-2a (F-06 arrival, 완료) → §C-4 (F-12) → §E → §F → §G**
 
-남은 우선 작업: §B-4(F-08 혼잡도 — arvlCd 라벨은 부분 완료), §C-4(가격 필터·오늘의 추천), §F(F-18 활성 시간대, 백엔드 합의 후), §G(docker-compose.test.yml·CI·health check). §E-2(F-22 노이즈 가드 재도입) 는 실 운영 측정 후 트리거.
+남은 우선 작업: §C-4(F-12 오늘의 추천, F-11 스케줄 도입 시 함께), §F(F-18 활성 시간대, 백엔드 합의 후), §G(docker-compose.test.yml·CI·health check). §E-2(F-22 노이즈 가드 재도입) 는 실 운영 측정 후 트리거. §B-4(F-08) 는 데이터 소스 부재로 범위 제외(2026-05-23).
 
 §B(교통)는 외부 데이터 소스(서울 공공 API)가 가장 안정적이고 조건 평가도 단순해서 첫 알림 흐름으로 적합. §B 로 큐·Sender·History 전체 경로를 검증한 다음 §C/§D 를 진행한다.
 

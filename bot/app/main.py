@@ -39,8 +39,9 @@ async def main() -> None:
     await _verify_database()
     logger.info("database_ready")
 
-    # redis_url 은 필수. create_redis_client 가 ping 실패 시 예외 → 봇 기동 실패.
-    redis_client: Redis = await create_redis_client(settings.redis_url)
+    # create_redis_client 가 ping 실패 시 예외 → 봇 기동 실패.
+    # use_iam_auth=True 면 ElastiCache IAM 토큰 방식, False 면 redis_url 방식.
+    redis_client: Redis = await create_redis_client(settings)
     logger.info("redis_ready")
 
     # httpx.AsyncClient: 공공 API 호출용. lifespan 에서 1회 생성·종료.

@@ -1,13 +1,27 @@
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.immediate_send.models import ImmediateSendRequest
 from app.domains.notifications.models import (
     Notification,
+    NotificationDeliveryStatus,
     NotificationHistory,
     NotificationType,
 )
+
+
+@dataclass(frozen=True)
+class NotificationHistoryView:
+    """F-17 응답 빌드용 뷰. Repository 가 raw Row 를 그대로 흘리지 않도록
+    `NotificationHistory` 와 LEFT JOIN COALESCE 로 도출한 `type` 을 묶어 둔 컨테이너.
+    """
+
+    history: NotificationHistory
+    type: NotificationType
 
 
 class NotificationRepository:
@@ -83,3 +97,51 @@ class NotificationRepository:
         stmt = delete(NotificationHistory).where(NotificationHistory.user_id == user_id)
         await self._session.execute(stmt)
         await self._session.flush()
+
+    async def list_history_for_user(
+        self,
+        user_id: int,
+        *,
+        sent_at_from: datetime,
+        sent_at_to: datetime,
+        type_: NotificationType | None,
+        status: NotificationDeliveryStatus | None,
+        limit: int,
+    ) -> list[NotificationHistoryView]:
+        """F-17 알림 발송 이력 조회. `type` 컬럼은 history 본체에 없으므로
+        `Notification` / `ImmediateSendRequest` 와 LEFT JOIN 후 COALESCE 로 도출한다.
+
+        관리자(F-22) 알림 row 는 양 FK 가 모두 NULL 로 적재되므로 WHERE 절에서 제외한다
+        — F-17 은 사용자의 알림 이력만을 대상으로 한다는 정책(§E-1 합의 전 Plan A).
+        """
+        type_expr = func.coalesce(Notification.type, ImmediateSendRequest.type)
+        stmt = (
+            select(NotificationHistory, type_expr.label("derived_type"))
+            .outerjoin(
+                Notification,
+                NotificationHistory.notification_id == Notification.id,
+            )
+            .outerjoin(
+                ImmediateSendRequest,
+                NotificationHistory.immediate_send_request_id
+                == ImmediateSendRequest.id,
+            )
+            .where(NotificationHistory.user_id == user_id)
+            .where(NotificationHistory.sent_at >= sent_at_from)
+            .where(NotificationHistory.sent_at < sent_at_to)
+            .where(
+                or_(
+                    NotificationHistory.notification_id.is_not(None),
+                    NotificationHistory.immediate_send_request_id.is_not(None),
+                )
+            )
+            .order_by(NotificationHistory.sent_at.desc())
+            .limit(limit)
+        )
+        if type_ is not None:
+            stmt = stmt.where(type_expr == type_)
+        if status is not None:
+            stmt = stmt.where(NotificationHistory.status == status)
+
+        result = await self._session.execute(stmt)
+        return [NotificationHistoryView(history=h, type=t) for h, t in result.all()]
