@@ -64,15 +64,9 @@ function LunchForm({ config, onChange }) {
 
   return (
     <>
-      <div className="field-row">
-        <Field label="발송 시각">
-          <input className="input" type="time" value={fmtTime(c.notify_at)} onChange={e => set('notify_at', e.target.value)} />
-        </Field>
-        <Field label="추천 음식점 수 (1–10)">
-          <input className="input" type="number" min={1} max={10}
-            value={c.recommend_count} onChange={e => set('recommend_count', Number(e.target.value))} />
-        </Field>
-      </div>
+      <Field label="발송 시각">
+        <input className="input" type="time" value={fmtTime(c.notify_at)} onChange={e => set('notify_at', e.target.value)} />
+      </Field>
       <Field label="오늘의 추천 강조">
         <div style={{ display: 'flex', gap: 8 }}>
           {[['true','켜기'],['false','끄기']].map(([v, l]) => (
@@ -126,7 +120,7 @@ function defaultConfig(kind, existing) {
     return existing ? { ...base, ...existing } : base;
   }
   if (kind === 'lunch') {
-    const base = { notify_at: '11:30', recommend_count: 3, highlight_today_pick: true };
+    const base = { notify_at: '11:30', highlight_today_pick: true };
     return existing ? { ...base, ...existing } : base;
   }
   if (kind === 'library') {

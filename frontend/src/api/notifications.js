@@ -109,10 +109,9 @@ function toDisplayItem(n) {
     return {
       ...base,
       name: `점심 알림 — ${at}`,
-      sub: `${at} 발송 · 추천 ${c.recommend_count}곳`,
+      sub: `${at} 발송`,
       conds: [
         { k: '시각', v: at },
-        { k: '추천', v: `${c.recommend_count}곳` },
         { k: '오늘의 추천', v: c.highlight_today_pick ? '강조' : '끄기' },
       ],
     };
