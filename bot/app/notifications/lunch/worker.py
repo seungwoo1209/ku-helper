@@ -63,7 +63,6 @@ async def run_lunch_job(ctx: JobContext) -> None:
     3. 조건 충족 시 LunchClient + RestaurantsClient 호출 → 임베드 빌드 → 큐 적재.
     4. 크롤러 실패는 구독별로 격리하고 틱당 1회 admin alert.
 
-    ctx.redis_client 가 None 이면 잡 skip(Redis 없이 dedup 불가).
     ctx.lunch_client / ctx.restaurants_client 가 None 이면 잡 skip.
     """
     lunch_client = ctx.lunch_client
