@@ -562,6 +562,221 @@ async def test_api_unavailable_calls_admin_alert_once(
 
 
 # ---------------------------------------------------------------------------
+# 결함 2 회귀 가드 1: 앞 구독 실패해도 뒤 구독은 정상 처리 (격리 검증)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_FIXED_KST, tick=False)
+async def test_first_subscription_failure_does_not_block_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """역 A 구독이 SubwayApiUnavailable 을 던져도 역 B 구독은 큐에 적재된다.
+
+    수정 전에는 루프 외부 except 로 점프해 역 B 가 처리되지 않았다.
+    이 케이스가 fail 하면 per-subscription 격리 회귀가 재발한 것.
+    """
+    notif_a = _FakeNotification(
+        id=60,
+        user_id=1,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config={
+            "mode": "recurring",
+            "station_name": "역_A_실패",
+            "line": "2호선",
+            "repeat_interval_minutes": 0,
+        },
+    )
+    notif_b = _FakeNotification(
+        id=61,
+        user_id=2,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config={
+            "mode": "recurring",
+            "station_name": "역_B_정상",
+            "line": "9호선",
+            "repeat_interval_minutes": 0,
+        },
+    )
+    user_a = _FakeUser(id=1, discord_id=1111)
+    user_b = _FakeUser(id=2, discord_id=2222)
+
+    class _SelectiveSubwayClient:
+        """역_A_실패 → 예외, 역_B_정상 → 정상 도착 반환."""
+
+        async def fetch_arrivals(self, station_name: str) -> list[SubwayArrival]:
+            if station_name == "역_A_실패":
+                raise SubwayApiUnavailable()
+            return [_make_arrival()]
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_ctx(queue=queue)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo(
+                [(notif_a, user_a), (notif_b, user_b)]
+            ),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings, redis: _SelectiveSubwayClient(),
+        )
+
+        await run_transit_job(ctx)
+
+    # 역 A 실패에도 불구하고 역 B 는 큐에 적재돼야 한다.
+    assert queue.qsize() == 1, "역 A 실패가 역 B 처리를 막아서는 안 된다"
+    task = await queue.get()
+    assert task.notification_id == notif_b.id
+
+
+# ---------------------------------------------------------------------------
+# 결함 2 회귀 가드 2: 여러 구독 실패 → admin alert 틱당 1회
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_FIXED_KST, tick=False)
+async def test_multiple_failures_trigger_admin_alert_once_per_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """서로 다른 역 3개가 모두 SubwayApiUnavailable 을 던질 때 admin alert 는 1회만 발송.
+
+    수정 전 외곽 except 로 첫 예외만 잡혔고, 수정 후에는 루프 후 단일 호출.
+    이 케이스가 fail 하면 admin DM 폭주 회귀가 재발한 것.
+    """
+    failing_notifs = [
+        _FakeNotification(
+            id=70 + i,
+            user_id=i,
+            type=NotificationType.TRANSIT,
+            enabled=True,
+            config={
+                "mode": "recurring",
+                "station_name": f"실패역_{i}",
+                "line": "2호선",
+                "repeat_interval_minutes": 0,
+            },
+        )
+        for i in range(3)
+    ]
+    failing_users = [_FakeUser(id=i, discord_id=1000 + i) for i in range(3)]
+
+    enqueue_calls: list[tuple[object, ...]] = []
+
+    async def _fake_enqueue(
+        queue: object,
+        settings: object,
+        source: CrawlerSource,
+        exc: BaseException,
+    ) -> None:
+        enqueue_calls.append((source, exc))
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_ctx(queue=queue)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo(
+                list(zip(failing_notifs, failing_users))
+            ),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings, redis: _RaisingSubwayClient(),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.enqueue_admin_alerts",
+            _fake_enqueue,
+        )
+
+        await run_transit_job(ctx)
+
+    # 3개 구독이 모두 실패해도 admin DM 은 틱당 1건이어야 한다.
+    assert len(enqueue_calls) == 1, (
+        f"admin alert 가 {len(enqueue_calls)}회 호출됨 — 틱당 1회여야 한다"
+    )
+    assert enqueue_calls[0][0] == CrawlerSource.SUBWAY
+
+
+# ---------------------------------------------------------------------------
+# 결함 2 회귀 가드 3: 모든 구독 정상 → admin alert 없음
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@time_machine.travel(_FIXED_KST, tick=False)
+async def test_all_subscriptions_normal_no_admin_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """모든 구독이 정상적으로 처리되면 admin alert 가 호출되지 않는다."""
+    notif = _FakeNotification(
+        id=80,
+        user_id=1,
+        type=NotificationType.TRANSIT,
+        enabled=True,
+        config={
+            "mode": "recurring",
+            "station_name": "강남",
+            "line": "2호선",
+            "repeat_interval_minutes": 0,
+        },
+    )
+    user = _FakeUser(id=1, discord_id=9999)
+
+    enqueue_calls: list[tuple[object, ...]] = []
+
+    async def _fake_enqueue(
+        queue: object,
+        settings: object,
+        source: CrawlerSource,
+        exc: BaseException,
+    ) -> None:
+        enqueue_calls.append((source, exc))
+
+    queue: asyncio.Queue[SendDmTask] = asyncio.Queue()
+    ctx = _make_ctx(queue=queue)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            "app.notifications.transit.worker.NotificationRepository",
+            lambda session: _FakeNotificationRepo([(notif, user)]),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.NotificationHistoryRepository",
+            lambda session: _FakeHistoryRepo(last_sent_at=None),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.SubwayClient",
+            lambda http_client, settings, redis: _FakeSubwayClient(
+                [_make_arrival()], []
+            ),
+        )
+        m.setattr(
+            "app.notifications.transit.worker.enqueue_admin_alerts",
+            _fake_enqueue,
+        )
+
+        await run_transit_job(ctx)
+
+    assert len(enqueue_calls) == 0, "정상 구독에서 admin alert 가 발생해서는 안 된다"
+    assert queue.qsize() == 1
+
+
+# ---------------------------------------------------------------------------
 # 회귀 가드 1: repeat_interval_minutes 키 이름 — 30초 전 발송 + 5분 interval → skip
 # ---------------------------------------------------------------------------
 

@@ -140,16 +140,51 @@ async def test_fetch_arrivals_info_000_returns_subway_arrivals(
 
 
 # ---------------------------------------------------------------------------
-# 테스트: INFO-200 (데이터 없음)
+# 테스트: INFO-200 (데이터 없음) — 중첩 형태 (이전 형식 호환)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_fetch_arrivals_info_200_returns_empty_list(
+async def test_fetch_arrivals_info_200_nested_returns_empty_list(
     redis: fakeredis.aioredis.FakeRedis,
 ) -> None:
-    """INFO-200 → 빈 리스트 반환."""
+    """중첩 형태 INFO-200 → 빈 리스트 반환 (예외 없음)."""
     payload = {"errorMessage": {"code": "INFO-200", "message": "해당하는 데이터 없음"}}
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(_station_url("강남")).mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+
+        async with httpx.AsyncClient() as client:
+            subway_client = SubwayClient(client, _make_settings(), redis)
+            result = await subway_client.fetch_arrivals("강남")
+
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# 테스트: INFO-200 평면 형태 — 실제 API 응답과 동일한 형태 (결함 1 회귀 가드)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_arrivals_flat_info_200_returns_empty_list(
+    redis: fakeredis.aioredis.FakeRedis,
+) -> None:
+    """평면 형태 INFO-200 → 빈 리스트 반환 (예외 없음).
+
+    실제 API 가 errorMessage 래퍼 없이 top-level 에 code 를 반환하는 경우.
+    이전 코드는 code="" 로 처리해 SubwayApiUnavailable 을 던졌다 — 회귀 가드.
+    """
+    payload = {
+        "status": 500,
+        "code": "INFO-200",
+        "message": "해당하는 데이터가 없습니다.",
+        "link": "",
+        "developerMessage": "",
+        "total": 0,
+    }
 
     with respx.mock(assert_all_called=True) as mock:
         mock.get(_station_url("강남")).mock(
@@ -187,16 +222,49 @@ async def test_fetch_arrivals_info_100_raises_auth_failed(
 
 
 # ---------------------------------------------------------------------------
-# 테스트: ERROR-500 (서버 오류)
+# 테스트: ERROR-500 (서버 오류) — 중첩 형태 (이전 형식 호환)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_fetch_arrivals_error_500_raises_unavailable(
+async def test_fetch_arrivals_error_500_nested_raises_unavailable(
     redis: fakeredis.aioredis.FakeRedis,
 ) -> None:
-    """errorMessage.code = ERROR-500 → SubwayApiUnavailable."""
+    """중첩 형태 ERROR-500 → SubwayApiUnavailable."""
     payload = {"errorMessage": {"code": "ERROR-500", "message": "서버 오류"}}
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(_station_url("강남")).mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+
+        async with httpx.AsyncClient() as client:
+            subway_client = SubwayClient(client, _make_settings(), redis)
+            with pytest.raises(SubwayApiUnavailable):
+                await subway_client.fetch_arrivals("강남")
+
+
+# ---------------------------------------------------------------------------
+# 테스트: ERROR-500 평면 형태 — 실제 API 응답과 동일한 형태 (결함 1 회귀 가드)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_arrivals_flat_error_500_raises_unavailable(
+    redis: fakeredis.aioredis.FakeRedis,
+) -> None:
+    """평면 형태 ERROR-500 → SubwayApiUnavailable.
+
+    진짜 장애는 여전히 장애로 분류돼야 한다 — 회귀 가드.
+    """
+    payload = {
+        "status": 500,
+        "code": "ERROR-500",
+        "message": "서버 내부 오류",
+        "link": "",
+        "developerMessage": "",
+        "total": 0,
+    }
 
     with respx.mock(assert_all_called=True) as mock:
         mock.get(_station_url("강남")).mock(
