@@ -176,12 +176,13 @@ class SubwayClient:
             _logger.warning("subway_api_unexpected_format", masked_url=masked_url)
             raise SubwayApiUnavailable()
 
-        error_block = data.get("errorMessage", {})
-        if not isinstance(error_block, dict):
-            _logger.warning("subway_api_no_error_block", masked_url=masked_url)
-            raise SubwayApiUnavailable()
-
-        code = error_block.get("code", "")
+        # 서울 API 응답은 두 가지 형태다.
+        # 성공(INFO-000): {"errorMessage": {"code": "INFO-000", ...}, "realtimeArrivalList": [...]}
+        # 오류(INFO-200 등): {"status": 500, "code": "INFO-200", "message": "...", "total": 0}
+        # 중첩 형태에 code 가 있으면 그것을 우선 사용하고, 없으면 top-level code 를 사용한다.
+        error_block = data.get("errorMessage")
+        nested_code = error_block.get("code") if isinstance(error_block, dict) else None
+        code: str = nested_code or str(data.get("code", ""))
 
         if code == "INFO-000":
             rows = data.get("realtimeArrivalList", [])
