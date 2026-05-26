@@ -1,15 +1,20 @@
+from datetime import date
+from pathlib import Path as _FsPath
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Path, Response
+from fastapi import APIRouter, Body, Depends, Path, Query, Response
 from pydantic import BaseModel
 
 from app.domains.notifications.dependencies import get_notification_service
-from app.domains.users.dependencies import get_current_user
-from app.domains.notifications.models import NotificationType
+from app.domains.notifications.models import (
+    NotificationDeliveryStatus,
+    NotificationType,
+)
 from app.domains.notifications.schemas import (
     LibraryUpdate,
     LunchUpdate,
     NotificationCreate,
+    NotificationHistoryRead,
     NotificationRead,
     TransitUpdate,
     _LibraryRead,
@@ -18,7 +23,11 @@ from app.domains.notifications.schemas import (
     read_from_orm,
 )
 from app.domains.notifications.service import NotificationService
+from app.domains.users.dependencies import get_current_user
 from app.domains.users.models import User
+
+# backend/app/domains/notifications/router.py 기준 → backend/docs/endpoints
+_DOCS_DIR = _FsPath(__file__).resolve().parents[3] / "docs" / "endpoints"
 
 router = APIRouter(prefix="/me/notifications", tags=["notifications"])
 
@@ -136,6 +145,88 @@ async def list_library_notifications(
         current_user.id, NotificationType.LIBRARY
     )
     return [read_from_orm(n) for n in notifications]
+
+
+@router.get(
+    "/history",
+    response_model=list[NotificationHistoryRead],
+    status_code=200,
+    summary="알림 발송 이력 조회",
+    description=(_DOCS_DIR / "list_notification_history.md").read_text(
+        encoding="utf-8"
+    ),
+    response_description="발송 시각 내림차순으로 정렬된 이력 배열",
+    responses={
+        401: _AUTH_401,
+        422: {
+            "description": (
+                "조회 기간이 유효하지 않거나 limit 이 범위를 벗어남 "
+                "(INVALID_HISTORY_DATE_RANGE / Query validation)"
+            )
+        },
+    },
+)
+async def list_notification_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[NotificationService, Depends(get_notification_service)],
+    date_from: Annotated[
+        date | None,
+        Query(
+            description=(
+                "조회 시작일 (YYYY-MM-DD, UTC). 미지정 시 date_to - 30d 로 자동 보정."
+            ),
+        ),
+    ] = None,
+    date_to: Annotated[
+        date | None,
+        Query(
+            description=("조회 종료일 (YYYY-MM-DD, inclusive). 미지정 시 현재 시각."),
+        ),
+    ] = None,
+    type_: Annotated[
+        NotificationType | None,
+        Query(
+            alias="type",
+            description="알림 유형 필터 (TRANSIT/LUNCH/LIBRARY). 미지정 시 전체.",
+        ),
+    ] = None,
+    status: Annotated[
+        NotificationDeliveryStatus | None,
+        Query(description="발송 결과 필터 (SUCCESS/FAILED). 미지정 시 전체."),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=100,
+            description="최대 반환 건수. 1~100, 기본 100.",
+        ),
+    ] = 100,
+) -> list[NotificationHistoryRead]:
+    """현재 사용자의 알림 발송 이력을 최신순으로 반환한다 (F-17)."""
+    views = await service.list_history(
+        current_user.id,
+        date_from=date_from,
+        date_to=date_to,
+        type_=type_,
+        status=status,
+        limit=limit,
+    )
+    return [
+        NotificationHistoryRead.model_validate(
+            {
+                "id": v.history.id,
+                "type": v.type,
+                "sent_at": v.history.sent_at,
+                "status": v.history.status,
+                "failure_reason": v.history.failure_reason,
+                "payload": v.history.payload,
+                "notification_id": v.history.notification_id,
+                "immediate_send_request_id": v.history.immediate_send_request_id,
+            }
+        )
+        for v in views
+    ]
 
 
 @router.get(
