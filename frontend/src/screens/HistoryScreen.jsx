@@ -18,7 +18,7 @@ const HistoryScreen = ({ state }) => {
             <button key={k} aria-pressed={tab === k} onClick={() => setTab(k)}>{label}</button>
           ))}
         </div>
-        <span className="hint">2026-04-13 → 2026-05-13 · 총 {rows.length}건</span>
+        <span className="hint">총 {rows.length}건</span>
       </div>
 
       <div className="feed-list">

@@ -1,9 +1,31 @@
+import { useState } from 'react';
 import { SectionHead, EmbedPreview } from '../components/ui';
 import RuleRow from '../components/RuleRow';
-import { updateNotification } from '../api/notifications';
+import { updateNotification, immediateSendLibrary } from '../api/notifications';
 
 const LibraryScreen = ({ state, setState, onEdit, onAdd }) => {
   const rooms = state.library.rooms;
+  const [sending, setSending] = useState({});
+
+  function sendLabel(id) {
+    const st = sending[id];
+    if (st === 'sending') return '발송 중…';
+    if (st === 'ok') return '✓ 발송됨';
+    if (st === 'rate') return '1분 후 재시도';
+    if (st === 'err') return '오류';
+    return '지금 발송 →';
+  }
+
+  async function handleSendNow(room) {
+    setSending(s => ({ ...s, [room.id]: 'sending' }));
+    try {
+      await immediateSendLibrary(room.config.reading_room_id);
+      setSending(s => ({ ...s, [room.id]: 'ok' }));
+    } catch (e) {
+      setSending(s => ({ ...s, [room.id]: e.message === 'RATE_LIMITED' ? 'rate' : 'err' }));
+    }
+    setTimeout(() => setSending(s => { const n = { ...s }; delete n[room.id]; return n; }), 3000);
+  }
 
   async function handleToggle(id, enabled) {
     setState(s => ({
@@ -33,10 +55,17 @@ const LibraryScreen = ({ state, setState, onEdit, onAdd }) => {
       <div className="rules">
         {rooms.length === 0 && <div className="hint" style={{ padding: '20px 0' }}>등록된 도서관 알림이 없습니다.</div>}
         {rooms.map((r, i) => (
-          <RuleRow key={r.id} idx={i + 1} title={r.name} sub={r.sub} conds={r.conds}
-                   on={r.on}
-                   onToggle={(v) => handleToggle(r.id, v)}
-                   onEdit={() => onEdit(r)} />
+          <div key={r.id}>
+            <RuleRow idx={i + 1} title={r.name} sub={r.sub} conds={r.conds}
+                     on={r.on}
+                     onToggle={(v) => handleToggle(r.id, v)}
+                     onEdit={() => onEdit(r)} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -4, marginBottom: 8 }}>
+              <button className="link" onClick={() => handleSendNow(r)} disabled={!!sending[r.id]}>
+                {sendLabel(r.id)}
+              </button>
+            </div>
+          </div>
         ))}
       </div>
       <button className="add-rule" onClick={onAdd}>
@@ -49,10 +78,9 @@ const LibraryScreen = ({ state, setState, onEdit, onAdd }) => {
         urgent
         kind="도서관 · library · 긴급"
         title="긴급 · 제 4 열람실 잔여 8석"
-        sub="22:14 발송 · 임계값 8석에 도달했습니다. 평소 회복까지 12–18분이 소요됩니다."
+        sub="22:14 발송 · 임계값 8석에 도달했습니다. "
         fields={[
           { k: "잔여 / 정원", v: "8 / 240" },
-          { k: "추세", v: "↘ 감소" },
           { k: "긴급 임계", v: "8석" },
         ]}
         footnote="이 알림은 잔여석 회복 후 재하락 시 다시 발송됩니다."

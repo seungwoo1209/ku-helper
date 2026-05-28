@@ -4,18 +4,32 @@ import { createNotification, updateNotification, deleteNotification } from '../a
 import { fmtTime } from '../utils/time';
 
 /* ── Transit 폼 ─────────────────────────────────── */
+function directionOptionsForLine(line) {
+  return line === '2호선' ? ['내선', '외선'] : ['상행', '하행'];
+}
+
 function TransitForm({ config, onChange }) {
   const c = config;
   const set = (key, val) => onChange({ ...c, [key]: val });
+  const directionOptions = directionOptionsForLine(c.line);
+  const direction = directionOptions.includes(c.direction) ? c.direction : directionOptions[0];
+  const setLine = (line) => {
+    const nextDirectionOptions = directionOptionsForLine(line);
+    onChange({
+      ...c,
+      line,
+      direction: nextDirectionOptions.includes(c.direction) ? c.direction : nextDirectionOptions[0],
+    });
+  };
 
   return (
     <>
       <div className="field-row">
         <Field label="역명">
-          <input className="input" value={c.station_name} onChange={e => set('station_name', e.target.value)} placeholder="예) 신촌" />
+          <input className="input" value={c.station_name ?? ''} onChange={e => set('station_name', e.target.value)} placeholder="예) 신촌" />
         </Field>
         <Field label="노선">
-          <select className="select" value={c.line} onChange={e => set('line', e.target.value)}>
+          <select className="select" value={c.line ?? '2호선'} onChange={e => setLine(e.target.value)}>
             {['1호선','2호선','3호선','4호선','5호선','6호선','7호선','8호선','9호선'].map(l => <option key={l}>{l}</option>)}
           </select>
         </Field>
@@ -33,14 +47,18 @@ function TransitForm({ config, onChange }) {
         <>
           <div className="field-row">
             <Field label="방향">
-              <select className="select" value={c.direction} onChange={e => set('direction', e.target.value)}>
-                {['상행','하행','내선','외선'].map(d => <option key={d}>{d}</option>)}
+              <select className="select" value={direction} onChange={e => set('direction', e.target.value)}>
+                {directionOptions.map(d => <option key={d}>{d}</option>)}
               </select>
             </Field>
             <Field label="도착 몇 분 전">
               <input className="input" type="number" min={1} max={120}
-                value={c.minutes_before} onChange={e => set('minutes_before', Number(e.target.value))} />
+                value={c.minutes_before ?? 3} onChange={e => set('minutes_before', Number(e.target.value))} />
             </Field>
+          </div>
+          <div className="field-row">
+            <Field label="시작 시각"><input className="input" type="time" value={fmtTime(c.start_time)} onChange={e => set('start_time', e.target.value)} /></Field>
+            <Field label="종료 시각"><input className="input" type="time" value={fmtTime(c.end_time)} onChange={e => set('end_time', e.target.value)} /></Field>
           </div>
         </>
       ) : (
@@ -49,7 +67,7 @@ function TransitForm({ config, onChange }) {
           <Field label="종료 시각"><input className="input" type="time" value={fmtTime(c.end_time)} onChange={e => set('end_time', e.target.value)} /></Field>
           <Field label="반복 간격 (분)">
             <input className="input" type="number" min={1} max={180}
-              value={c.repeat_interval_minutes} onChange={e => set('repeat_interval_minutes', Number(e.target.value))} />
+              value={c.repeat_interval_minutes ?? 15} onChange={e => set('repeat_interval_minutes', Number(e.target.value))} />
           </Field>
         </div>
       )}
@@ -57,7 +75,7 @@ function TransitForm({ config, onChange }) {
         <div style={{ display: 'flex', gap: 8 }}>
           {[['true','포함'],['false','제외']].map(([v, l]) => (
             <button key={v} type="button" className="chip"
-              aria-pressed={String(c.include_congestion) === v}
+              aria-pressed={String(c.include_congestion ?? true) === v}
               onClick={() => set('include_congestion', v === 'true')}>{l}</button>
           ))}
         </div>
@@ -73,17 +91,11 @@ function LunchForm({ config, onChange }) {
 
   return (
     <>
-      <div className="field-row">
-        <Field label="발송 시각">
-          <input className="input" type="time" value={fmtTime(c.notify_at)} onChange={e => set('notify_at', e.target.value)} />
-        </Field>
-        <Field label="추천 음식점 수 (1–10)">
-          <input className="input" type="number" min={1} max={10}
-            value={c.recommend_count} onChange={e => set('recommend_count', Number(e.target.value))} />
-        </Field>
-      </div>
-      <Field label="주변 음식점 최대 가격 (선택)">
-        <input className="input" type="number" min={0} placeholder="예) 9000 (빈칸이면 제한 없음)"
+      <Field label="발송 시각">
+        <input className="input" type="time" value={fmtTime(c.notify_at)} onChange={e => set('notify_at', e.target.value)} />
+      </Field>
+      <Field label="최대 가격 (원, 빈칸이면 제한 없음)">
+        <input className="input" type="number" min={0} placeholder="제한 없음"
           value={c.max_price ?? ''} onChange={e => set('max_price', e.target.value ? Number(e.target.value) : null)} />
       </Field>
       <Field label="오늘의 추천 강조">
@@ -100,7 +112,13 @@ function LunchForm({ config, onChange }) {
 }
 
 /* ── Library 폼 ─────────────────────────────────── */
-const READING_ROOMS = ['제1열람실','제2열람실','제3열람실','제4열람실','대학원열람실'];
+const READING_ROOMS = [
+  { id: 0, label: '전체 열람실' },
+  { id: 1, label: '제1열람실' },
+  { id: 2, label: '제2열람실' },
+  { id: 3, label: '제3열람실' },
+  { id: 5, label: '제5열람실' },
+];
 
 function LibraryForm({ config, onChange }) {
   const c = config;
@@ -109,14 +127,14 @@ function LibraryForm({ config, onChange }) {
   return (
     <>
       <Field label="열람실">
-        <select className="select" value={c.reading_room_id} onChange={e => set('reading_room_id', e.target.value)}>
-          {READING_ROOMS.map(r => <option key={r} value={r}>{r}</option>)}
+        <select className="select" value={c.reading_room_id ?? 1} onChange={e => set('reading_room_id', Number(e.target.value))}>
+          {READING_ROOMS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
         </select>
       </Field>
       <div className="field-row">
         <Field label="알림 임계값 (잔여 좌석)">
           <input className="input" type="number" min={0}
-            value={c.threshold} onChange={e => set('threshold', Number(e.target.value))} />
+            value={c.threshold ?? 20} onChange={e => set('threshold', Number(e.target.value))} />
         </Field>
         <Field label="긴급 임계값 (선택)">
           <input className="input" type="number" min={0} placeholder="빈칸이면 없음"
@@ -129,11 +147,28 @@ function LibraryForm({ config, onChange }) {
 
 /* ── 기본 config 초기값 ──────────────────────────── */
 function defaultConfig(kind, existing) {
-  if (existing) return kind === 'transit' ? { direction: '상행', ...existing } : { ...existing };
-  if (kind === 'transit') return { mode: 'arrival', station_name: '', line: '2호선', direction: '상행', minutes_before: 3, include_congestion: true, start_time: '08:00', end_time: '09:30', repeat_interval_minutes: 15 };
-  if (kind === 'lunch')   return { notify_at: '11:30', max_price: null, recommend_count: 3, highlight_today_pick: true };
-  if (kind === 'library') return { reading_room_id: READING_ROOMS[0], threshold: 20, urgent_threshold: null };
+  if (kind === 'transit') {
+    const base = { mode: 'arrival', station_name: '', line: '2호선', direction: '내선', minutes_before: 3, start_time: '08:00', end_time: '09:30', repeat_interval_minutes: 15, include_congestion: true };
+    return existing ? { ...base, ...existing } : base;
+  }
+  if (kind === 'lunch') {
+    const base = { notify_at: '11:30', max_price: null, recommend_count: 3, highlight_today_pick: true };
+    return existing ? { ...base, ...existing } : base;
+  }
+  if (kind === 'library') {
+    const base = { reading_room_id: 1, threshold: 20, urgent_threshold: null };
+    return existing ? { ...base, ...existing } : base;
+  }
   return {};
+}
+
+function normalizeConfig(kind, config) {
+  if (kind !== 'transit') return config;
+  const directionOptions = directionOptionsForLine(config.line);
+  return {
+    ...config,
+    direction: directionOptions.includes(config.direction) ? config.direction : directionOptions[0],
+  };
 }
 
 /* ── RuleEditModal ──────────────────────────────── */
@@ -154,10 +189,11 @@ const RuleEditModal = ({ open, rule, onClose, onSave, kind }) => {
     setSaving(true);
     setError(null);
     try {
+      const payloadConfig = normalizeConfig(kind, config);
       if (rule?.id) {
-        await updateNotification(kind, rule.id, { config });
+        await updateNotification(kind, rule.id, { config: payloadConfig });
       } else {
-        await createNotification({ type: typeMap[kind], enabled: true, config });
+        await createNotification({ type: typeMap[kind], enabled: true, config: payloadConfig });
       }
       await onSave();
     } catch (e) {

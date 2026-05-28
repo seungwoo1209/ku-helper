@@ -10,14 +10,13 @@ import HistoryScreen from './screens/HistoryScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import RuleEditModal from './screens/RuleEditModal';
 import { SAMPLE } from './data/sample';
-import { listNotifications, buildStateFromNotifications } from './api/notifications';
+import { listNotifications, buildStateFromNotifications, listNotificationHistory, buildHistoryFromResponse } from './api/notifications';
+import { setTokens, getAccessToken, clearTokens, callRefresh, callLogout } from './api/auth';
 
 const ROUTE_LABELS = {
   dashboard: "01 대시보드", transit: "02 교통", lunch: "03 점심",
   library: "04 도서관", history: "05 이력", settings: "06 설정",
 };
-
-const TOKEN_KEY = 'ku_access_token';
 
 async function fetchMe(token) {
   const res = await fetch('/api/v1/users/me', {
@@ -41,25 +40,36 @@ function App() {
       // 1. URL params에서 token 추출 (Discord OAuth 콜백 직후)
       const params = new URLSearchParams(window.location.search);
       const tokenFromUrl = params.get('access_token');
+      const refreshFromUrl = params.get('refresh_token');
       if (tokenFromUrl) {
-        localStorage.setItem(TOKEN_KEY, tokenFromUrl);
-        // URL에서 token 제거 (히스토리 오염 방지)
+        setTokens(tokenFromUrl, refreshFromUrl);
         window.history.replaceState({}, '', window.location.pathname);
       }
 
-      // 2. localStorage에서 token 읽어 유저 정보 조회
-      const token = localStorage.getItem(TOKEN_KEY);
+      // 2. 저장된 access token으로 유저 정보 조회 (만료 시 refresh 1회 재시도)
+      let token = getAccessToken();
       if (token) {
-        const me = await fetchMe(token);
+        let me = await fetchMe(token);
+        if (!me) {
+          const newToken = await callRefresh();
+          if (newToken) me = await fetchMe(newToken);
+        }
         if (me) {
           setUser(me);
+          setState(s => ({
+            ...s,
+            transit: { rules: [] }, lunch: { rules: [] }, library: { rooms: [] }, history: [],
+          }));
           try {
             const notifications = await listNotifications();
             setState(s => ({ ...s, ...buildStateFromNotifications(notifications) }));
-          } catch (_) { /* DB 미연결 등 실패 시 SAMPLE 유지 */ }
+          } catch (_) {}
+          try {
+            const history = await listNotificationHistory();
+            setState(s => ({ ...s, history: buildHistoryFromResponse(history) }));
+          } catch (_) {}
         } else {
-          // token 만료 or 무효 → 제거
-          localStorage.removeItem(TOKEN_KEY);
+          clearTokens();
         }
       }
       setAuthReady(true);
@@ -77,8 +87,8 @@ function App() {
     return () => window.removeEventListener('message', onMsg);
   }, []);
 
-  function logout() {
-    localStorage.removeItem(TOKEN_KEY);
+  async function logout() {
+    await callLogout();
     setUser(null);
   }
 
@@ -94,6 +104,10 @@ function App() {
     try {
       const notifications = await listNotifications();
       setState(s => ({ ...s, ...buildStateFromNotifications(notifications) }));
+    } catch (_) {}
+    try {
+      const history = await listNotificationHistory();
+      setState(s => ({ ...s, history: buildHistoryFromResponse(history) }));
     } catch (_) {}
   };
 

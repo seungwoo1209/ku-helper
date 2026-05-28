@@ -342,7 +342,6 @@ async def test_run_lunch_job_sends_again_next_day(
     task = await queue.get()
     assert task.notification_id == 5
 
-
 # ---------------------------------------------------------------------------
 # 회귀 가드 6: 앞 구독 LunchCrawlerFailed + 뒤 구독 정상 → 뒤 구독 적재 + admin 1회
 # ---------------------------------------------------------------------------
