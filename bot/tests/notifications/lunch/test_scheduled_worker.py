@@ -330,14 +330,17 @@ async def test_run_lunch_job_sends_again_next_day(
     with time_machine.travel("2026-05-26 03:00:00+00:00", tick=False):
         await run_lunch_job(ctx)
 
+        # dedup 키 검증은 frozen time 블록 안에서 수행해야 한다.
+        # SET 시 TTL=25h 로 저장되며, 실제 벽시계 기준으로는 이미 만료될 수 있다.
+        val = await redis.get("lunch_sent:5:2026-05-26")
+        assert val == "1"
+
+        ttl = await redis.ttl("lunch_sent:5:2026-05-26")
+        assert ttl > 0
+
     assert queue.qsize() == 1
     task = await queue.get()
     assert task.notification_id == 5
-
-    # 오늘 날짜 키가 새로 SET 된다.
-    val = await redis.get("lunch_sent:5:2026-05-26")
-    assert val == "1"
-
 
 # ---------------------------------------------------------------------------
 # 회귀 가드 6: 앞 구독 LunchCrawlerFailed + 뒤 구독 정상 → 뒤 구독 적재 + admin 1회
