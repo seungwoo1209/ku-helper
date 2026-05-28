@@ -171,7 +171,16 @@ async def run_lunch_job(ctx: JobContext) -> None:
                 continue
 
             # 5. 추천 맛집 샘플.
-            recommend_count = int(cfg.get("recommend_count", _RESTAURANTS_SAMPLE_SIZE))
+            _raw_count = cfg.get("recommend_count", _RESTAURANTS_SAMPLE_SIZE)
+            try:
+                recommend_count = int(_raw_count)
+            except (ValueError, TypeError):
+                _logger.warning(
+                    "lunch_invalid_recommend_count",
+                    notification_id=notification.id,
+                    raw=_raw_count,
+                )
+                recommend_count = _RESTAURANTS_SAMPLE_SIZE
             sampled = (
                 tuple(random.sample(pool, min(recommend_count, len(pool))))
                 if pool
@@ -207,7 +216,13 @@ async def run_lunch_job(ctx: JobContext) -> None:
                 ],
             }
 
-            # 8. Sender 큐 적재 + dedup 키 SET.
+            # 8. dedup 키 확정 → Sender 큐 적재.
+            # 중복 발송 방지가 정확성보다 우선 — 적재 전에 dedup 키를 먼저 SET한다.
+            # 적재~SET 사이 크래시 시 중복 발송을 막기 위해 transit worker 와 동일 순서.
+            await cast(
+                "Awaitable[object]",
+                redis.set(dedup_key, "1", ex=_DEDUP_TTL_SECONDS),
+            )
             await ctx.queue.put(
                 SendDmTask(
                     notification_id=notification.id,
@@ -216,10 +231,6 @@ async def run_lunch_job(ctx: JobContext) -> None:
                     embed=embed,
                     payload=payload,
                 )
-            )
-            await cast(
-                "Awaitable[object]",
-                redis.set(dedup_key, "1", ex=_DEDUP_TTL_SECONDS),
             )
             _logger.info(
                 "lunch_queued",
