@@ -174,6 +174,12 @@ jobs:
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
+      - name: Wait for RDS available
+        # terraform apply 직후에도 RDS 가 transitional 상태가 잠시 남아있을 수 있다.
+        # 첫 SQL 적용 race 방지용 방어 가드.
+        run: |
+          aws rds wait db-instance-available --db-instance-identifier ku-helper-pg
+
       - name: Create rds_iam grant (idempotent)
         env:
           BASTION_IP: ${{ needs.terraform-apply.outputs.bastion_ip }}
@@ -181,17 +187,29 @@ jobs:
           RDS_PORT: ${{ needs.terraform-apply.outputs.rds_port }}
           RDS_MASTER_SECRET_ARN: ${{ needs.terraform-apply.outputs.rds_master_secret_arn }}
         run: |
+          set -euo pipefail
           chmod 0600 $RUNNER_TEMP/ku-helper.pem
           mkdir -p ~/.ssh && chmod 0700 ~/.ssh
           ssh-keyscan -H "$BASTION_IP" >>~/.ssh/known_hosts 2>/dev/null || true
           ssh -i $RUNNER_TEMP/ku-helper.pem -o StrictHostKeyChecking=accept-new \
               -f -N -L 15432:${RDS_HOST}:${RDS_PORT} \
               ec2-user@${BASTION_IP}
+          # SSH -f 가 background 후에도 로컬 listener 가 bind 되기 직전 race 가능.
+          # 15432 가 실제로 listen 시작할 때까지 최대 30초 대기.
+          for i in $(seq 1 30); do
+            if bash -c '</dev/tcp/localhost/15432' 2>/dev/null; then
+              echo "SSH tunnel ready"; break
+            fi
+            sleep 1
+          done
           MASTER_PW=$(aws secretsmanager get-secret-value \
             --secret-id "$RDS_MASTER_SECRET_ARN" \
             --query SecretString --output text \
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["password"])')
-          PGPASSWORD="$MASTER_PW" psql -h localhost -p 15432 -U postgres -d ku_helper <<'SQL'
+          # ON_ERROR_STOP=1 가 없으면 GRANT 실패해도 psql 이 exit 0 → 워크플로 통과되지만
+          # rds_iam 매핑이 누락돼 앱은 "password authentication failed" 로 실패한다.
+          PGPASSWORD="$MASTER_PW" psql -h localhost -p 15432 -U postgres -d ku_helper \
+            -v ON_ERROR_STOP=1 <<'SQL'
           DO $$ BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ku_helper_app') THEN
               CREATE USER ku_helper_app WITH LOGIN;
@@ -203,6 +221,15 @@ jobs:
           ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ku_helper_app;
           ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ku_helper_app;
           SQL
+          # 검증: rds_iam 권한이 실제로 매핑됐는지. 누락이면 즉시 실패시켜
+          # 앱 시작 단계에서 password authentication failed 로 폭주하는 것을 막는다.
+          HAS_RDS_IAM=$(PGPASSWORD="$MASTER_PW" psql -h localhost -p 15432 -U postgres \
+            -d ku_helper -tAc "SELECT pg_has_role('ku_helper_app', 'rds_iam', 'MEMBER');")
+          if [ "$HAS_RDS_IAM" != "t" ]; then
+            echo "ERROR: ku_helper_app does NOT have rds_iam role granted (got: $HAS_RDS_IAM)" >&2
+            exit 1
+          fi
+          echo "rds_iam grant verified for ku_helper_app"
           pkill -f "ssh.*15432:${RDS_HOST}" || true
 
   migrate-and-rollout:
