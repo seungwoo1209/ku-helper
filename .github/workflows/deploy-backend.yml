@@ -151,7 +151,10 @@ jobs:
           MASTER_PW=$(aws secretsmanager get-secret-value \
             --secret-id "$RDS_MASTER_SECRET_ARN" \
             --query SecretString --output text | python3 -c 'import sys,json; print(json.load(sys.stdin)["password"])')
-          export ALEMBIC_DATABASE_URL="postgresql+asyncpg://postgres:${MASTER_PW}@localhost:15432/ku_helper"
+          # random_password 가 ?, &, %, < 등을 포함할 수 있어 URL-encode 필수
+          # (자세한 사유는 spin-up.yml 의 동일 블록 주석 참고).
+          ENCODED_PW=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MASTER_PW")
+          export ALEMBIC_DATABASE_URL="postgresql+asyncpg://postgres:${ENCODED_PW}@localhost:15432/ku_helper"
           uv run alembic upgrade head
           # tunnel 정리
           pkill -f "ssh.*15432:${RDS_HOST}" || true

@@ -280,7 +280,11 @@ jobs:
             --secret-id "$RDS_MASTER_SECRET_ARN" \
             --query SecretString --output text \
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["password"])')
-          export ALEMBIC_DATABASE_URL="postgresql+asyncpg://postgres:${MASTER_PW}@localhost:15432/ku_helper"
+          # random_password 가 ?, &, %, < 등을 포함할 수 있어 URL-encode 필수.
+          # 미인코딩 시 SQLAlchemy URL 파서가 '?' 를 쿼리스트링으로, '&' 를 구분자로
+          # 오인해 alembic 이 잘못된 host/dbname 으로 접속 시도 → connection refused.
+          ENCODED_PW=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MASTER_PW")
+          export ALEMBIC_DATABASE_URL="postgresql+asyncpg://postgres:${ENCODED_PW}@localhost:15432/ku_helper"
           uv run alembic upgrade head
           pkill -f "ssh.*15432:${RDS_HOST}" || true
 

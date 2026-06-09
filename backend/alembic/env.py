@@ -31,7 +31,12 @@ if not _alembic_url:
     raise RuntimeError(
         "ALEMBIC_DATABASE_URL or DATABASE_URL must be set to run alembic"
     )
-config.set_main_option("sqlalchemy.url", _alembic_url)
+# alembic.ini 는 ConfigParser 기반이라 set_main_option 시 `%` 가 interpolation 으로
+# 해석돼 ValueError 가 난다. RDS master password 의 특수문자가 `%XX` 로 URL-encode 된
+# 경우(워크플로가 quote 처리)도 ConfigParser 가 `%` 를 보고 오해석한다.
+# `%%` 로 escape 한 뒤 set 하면 ConfigParser 는 다시 `%` 로 복원하고 SQLAlchemy 가
+# `%XX` URL-decoding 으로 원래 문자를 복원한다.
+config.set_main_option("sqlalchemy.url", _alembic_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
