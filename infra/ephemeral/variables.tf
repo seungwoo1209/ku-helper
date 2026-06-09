@@ -57,9 +57,10 @@ variable "db_allocated_storage_gb" {
 }
 
 variable "db_engine_version" {
-  # ap-northeast-2 에서 16.4 는 단종됨. 사용 가능: 16.6, 16.8 ~ 16.14.
+  # ap-northeast-2 사용 가능: 16.9 ~ 16.14 (16.4·16.6·16.8 단종).
+  # describe-db-engine-versions 로 확인 후 갱신.
   type    = string
-  default = "16.6"
+  default = "16.14"
 }
 
 variable "db_name" {
